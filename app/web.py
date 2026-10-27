@@ -20,6 +20,7 @@ import i18n  # noqa: E402
 import plan_data  # noqa: E402
 import jobs  # noqa: E402
 import tv  # noqa: E402
+import ha  # noqa: E402
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # phone photos
@@ -259,11 +260,37 @@ def save_settings():
             calendars.append({'name': f.get(f'cal_name{i}', '').strip() or 'Calendar', 'url': url,
                               'color': f.get(f'cal_color{i}', 'green'), 'role': f.get(f'cal_role{i}', 'events')})
     cfg['calendars'] = calendars
+    _read_ha_fields(f, cfg)
     if cfg['schedule']['start'] >= cfg['schedule']['end']:
         return redirect(url_for('index', msg=ui()['end_after_start']))
     config.save(cfg)
     jobs.log('Settings saved')
     return redirect(url_for('index', msg=ui()['saved']))
+
+
+def _read_ha_fields(f, cfg):
+    """The token is never sent back to the browser, so an empty field keeps the saved one."""
+    if 'ha_url' not in f:
+        return
+    cur = cfg.get('home_assistant') or {}
+    url = f.get('ha_url', '').strip().rstrip('/')
+    if url and '://' not in url:
+        url = 'http://' + url
+    cfg['home_assistant'] = {'url': url, 'token': f.get('ha_token', '').strip() or cur.get('token', '')}
+
+
+@app.post('/ha-test')
+@protected
+def ha_test():
+    cfg = config.load()
+    _read_ha_fields(request.form, cfg)
+    config.save(cfg)
+    try:
+        text = ha.check(cfg)
+    except Exception as e:  # noqa: BLE001
+        text = f'{ui()["error"]} ({type(e).__name__}: {e})'[:300]
+    jobs.log(f'Home Assistant: {text}')
+    return redirect(url_for('index', msg=f'Home Assistant: {text}'))
 
 
 def main():

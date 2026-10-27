@@ -17,6 +17,7 @@ DEFAULTS = {
     'holidays': {'country': '', 'subdiv': ''},
     'schedule': {'enabled': True, 'start': '07:00', 'end': '10:00', 'days': [0, 1, 2, 3, 4, 5, 6]},
     'dim_past_events': True,
+    'home_assistant': {'url': '', 'token': ''},  # read-only REST access, see ha.py
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }
 

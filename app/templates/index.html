@@ -184,6 +184,15 @@
     </div>
   </section>
 
+  <section class="card">
+    <h2>Home Assistant</h2>
+    <div class="grid">
+      <label for="ha_url">{{ t.ha_url }}</label><input type="text" id="ha_url" name="ha_url" value="{{ cfg.home_assistant.url }}" placeholder="http://192.168.0.x:8123">
+      <label for="ha_token">{{ t.ha_token }}</label><input type="password" id="ha_token" name="ha_token" value="" autocomplete="off" placeholder="{{ t.ha_token_saved if cfg.home_assistant.token else '' }}">
+      <label></label><div><button formaction="{{ url_for('ha_test') }}">{{ t.btn_ha_test }}</button> <span class="hint">{{ t.ha_hint }}</span></div>
+    </div>
+  </section>
+
   <p><button class="primary">{{ t.btn_save }}</button></p>
   </form>
 
