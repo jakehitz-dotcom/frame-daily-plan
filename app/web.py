@@ -242,6 +242,7 @@ def save_settings():
         'start': f.get('start', '07:00'),
         'end': f.get('end', '10:00'),
         'days': [i for i in range(7) if f'day{i}' in f],
+        'refresh_minutes': min(120, int(f['refresh_minutes'])) if f.get('refresh_minutes', '').strip().isdigit() else 5,
     }
     cfg['weather'] = {
         'enabled': 'weather_enabled' in f,

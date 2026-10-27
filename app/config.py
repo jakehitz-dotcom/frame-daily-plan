@@ -15,7 +15,8 @@ DEFAULTS = {
     'calendars': [],
     'weather': {'enabled': True, 'name': '', 'lat': None, 'lon': None, 'unit': 'F'},  # unit: 'F' or 'C'
     'holidays': {'country': '', 'subdiv': ''},
-    'schedule': {'enabled': True, 'start': '07:00', 'end': '10:00', 'days': [0, 1, 2, 3, 4, 5, 6]},
+    'schedule': {'enabled': True, 'start': '07:00', 'end': '10:00', 'days': [0, 1, 2, 3, 4, 5, 6],
+                 'refresh_minutes': 5},  # 0 = show once per morning
     'dim_past_events': True,
     'home_assistant': {'url': '', 'token': ''},  # read-only REST access, see ha.py
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background

@@ -1,6 +1,7 @@
 """The actions: preview, show the plan, bring the artwork back, and the daily scheduler."""
 import collections
 import datetime
+import hashlib
 import json
 import os
 import threading
@@ -103,11 +104,13 @@ def delete_plans(a, state, keep=None):
     state['plan_ids'] = old + ([keep] if keep else [])
 
 
-def put_temporary(cfg, make_image, what):
+def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False):
     """Upload something temporary (plan, demo, message), show it, and tidy up.
 
     make_image(a, state) writes LAST_IMAGE. Shown inside the schedule window it is removed
     when the window ends; shown outside it, it stays until "Back to artwork".
+    kind 'plan' is kept up to date by the scheduler; only_if_changed skips the upload when the
+    new picture is identical to the one on the TV (most 5-minute refreshes).
     """
     require_tv(cfg)
     with lock:
@@ -118,8 +121,16 @@ def put_temporary(cfg, make_image, what):
             state['restore_id'] = current  # the family's normal artwork
         notes = make_image(a, state)
         with open(LAST_IMAGE, 'rb') as f:
-            cid = tv.send_image(a, f.read())
+            image = f.read()
+        digest = hashlib.sha256(image).hexdigest()
+        state['shown_at'] = time.time()
+        if only_if_changed and digest == state.get('image_hash') and current in state['plan_ids']:
+            save_state(state)
+            return state  # nothing changed and the plan is still on screen: leave the TV alone
+        cid = tv.send_image(a, image)
         state['plan_ids'].append(cid)
+        state['image_hash'] = digest
+        state['showing'] = kind
         state['restore_due'] = in_window(cfg, now_local(cfg))
         save_state(state)  # record the upload before anything else can fail
         show = a.get_artmode() == 'on'  # never interrupt a running TV programme
@@ -131,12 +142,12 @@ def put_temporary(cfg, make_image, what):
         return state
 
 
-def show_plan(cfg):
+def show_plan(cfg, refresh=False):
     def make(a, state):
         data = plan_data.build(cfg, now_local(cfg))
         render.render(data, LAST_IMAGE, artwork_background(cfg, a, state.get('restore_id')))
         return data['errors']
-    state = put_temporary(cfg, make, 'Plan')
+    state = put_temporary(cfg, make, 'Plan updated' if refresh else 'Plan', kind='plan', only_if_changed=refresh)
     if in_window(cfg, now_local(cfg)):  # a manual plan at 06:30 must not stop the 07:00 one
         state['shown_on'] = now_local(cfg).date().isoformat()
         save_state(state)
@@ -151,7 +162,7 @@ def show_demo(cfg, lang='en', on_tv=True):
 
     def make(a, state):
         render.render(data, LAST_IMAGE, artwork_background(cfg, a, state.get('restore_id')))
-    put_temporary(cfg, make, f'Demo plan ({lang})')
+    put_temporary(cfg, make, f'Demo plan ({lang})', kind='demo')
 
 
 def show_text(cfg, text, theme='dark'):
@@ -161,7 +172,7 @@ def show_text(cfg, text, theme='dark'):
 
     def make(a, state):
         render.render_text(text, LAST_IMAGE, theme)
-    put_temporary(cfg, make, f'Message “{text.strip()[:40]}”')
+    put_temporary(cfg, make, f'Message “{text.strip()[:40]}”', kind='message')
 
 
 def restore(cfg):
@@ -174,6 +185,7 @@ def restore(cfg):
             log(f'Artwork {state["restore_id"]} restored')
         delete_plans(a, state)
         state['restore_due'] = False
+        state['showing'] = None  # "Back to artwork" also stops today's refreshes
         save_state(state)
 
 
@@ -191,6 +203,7 @@ def upload_artwork(cfg, src_path, mode='crop'):
         show = a.get_artmode() == 'on'
         a.select_image(cid, show=show)
         state['restore_id'] = cid
+        state['showing'] = None
         state.setdefault('artworks', []).append(cid)
         save_state(state)
         os.makedirs(ART_CACHE, exist_ok=True)
@@ -209,7 +222,12 @@ def _due(cfg, state, now):
     if not cfg.get('tv_ip'):
         return None  # not set up yet
     if in_window(cfg, now):
-        return 'show' if state.get('shown_on') != now.date().isoformat() else None
+        if state.get('shown_on') != now.date().isoformat():
+            return 'show'
+        every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
+        if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every:
+            return 'refresh'  # a message, demo or "Back to artwork" in between is left alone
+        return None
     # After the window (or on a later day if the TV was unreachable): bring the artwork back once.
     return 'restore' if state.get('restore_due') else None
 
@@ -221,7 +239,10 @@ def scheduler():
             cfg = config.load()
             action = _due(cfg, load_state(), now_local(cfg))
             if action and time.time() >= retry_at:
-                (show_plan if action == 'show' else restore)(cfg)
+                if action == 'restore':
+                    restore(cfg)
+                else:
+                    show_plan(cfg, refresh=action == 'refresh')
         except Exception as e:  # noqa: BLE001  e.g. TV switched off: try again in a few minutes
             log(f'Error ({type(e).__name__}: {e}), retrying in {RETRY_AFTER // 60} minutes')
             traceback.print_exc()

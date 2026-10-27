@@ -136,6 +136,8 @@
         <label class="inline"><input type="checkbox" name="schedule_enabled" {% if cfg.schedule.enabled %}checked{% endif %}> {{ t.active }}</label>
         {{ t.from }} <input type="time" name="start" value="{{ cfg.schedule.start }}"> {{ t.to }} <input type="time" name="end" value="{{ cfg.schedule.end }}"> {{ t.oclock }}
       </div>
+      <label for="refresh_minutes">{{ t.refresh }}</label>
+      <div class="row">{{ t.refresh_every }} <input type="number" id="refresh_minutes" name="refresh_minutes" min="0" max="120" value="{{ cfg.schedule.refresh_minutes }}" style="width:90px"> {{ t.minutes }} <span class="hint">{{ t.refresh_hint }}</span></div>
       <label>{{ t.weekdays }}</label>
       <div>{% for name in t.day_names %}<label class="inline"><input type="checkbox" name="day{{ loop.index0 }}" {% if loop.index0 in cfg.schedule.days %}checked{% endif %}> {{ name }}</label>{% endfor %}</div>
       <label for="timezone">{{ t.timezone }}</label><input type="text" id="timezone" name="timezone" value="{{ cfg.timezone }}">
