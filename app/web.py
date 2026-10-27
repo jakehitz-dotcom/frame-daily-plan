@@ -247,6 +247,7 @@ def save_settings():
         'name': f.get('weather_name', '').strip(),
         'lat': float(f['lat']) if f.get('lat') else None,
         'lon': float(f['lon']) if f.get('lon') else None,
+        'unit': 'C' if f.get('temp_unit') == 'C' else 'F',
     }
     cfg['holidays'] = {'country': f.get('hol_country', '').strip().upper(), 'subdiv': f.get('hol_subdiv', '').strip().upper()}
     cfg['dim_past_events'] = 'dim_past_events' in f

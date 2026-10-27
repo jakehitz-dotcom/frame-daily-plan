@@ -40,7 +40,7 @@ TEXT = {
         'colors': {'green': 'Grün', 'blue': 'Blau', 'orange': 'Orange', 'red': 'Rot', 'grey': 'Grau'},
         'kind_events': 'Termine', 'kind_todos': 'Aufgaben',
         'weather_holidays': 'Wetter und Feiertage', 'weather': 'Wetter', 'show_weather': 'anzeigen (Open-Meteo)',
-        'place': 'Ort', 'lat_lon': 'Breite / Länge', 'holidays': 'Feiertage', 'country': 'Land', 'region': 'Region',
+        'place': 'Ort', 'lat_lon': 'Breite / Länge', 'temp_unit': 'Temperatur', 'holidays': 'Feiertage', 'country': 'Land', 'region': 'Region',
         'holidays_hint': 'leer = keine Feiertage',
         'btn_save': 'Einstellungen speichern', 'log': 'Protokoll', 'log_empty': 'Noch keine Einträge',
         # messages after an action
@@ -91,7 +91,7 @@ TEXT = {
         'colors': {'green': 'Green', 'blue': 'Blue', 'orange': 'Orange', 'red': 'Red', 'grey': 'Grey'},
         'kind_events': 'Events', 'kind_todos': 'To-dos',
         'weather_holidays': 'Weather and holidays', 'weather': 'Weather', 'show_weather': 'show (Open-Meteo)',
-        'place': 'Place', 'lat_lon': 'Latitude / longitude', 'holidays': 'Public holidays', 'country': 'Country', 'region': 'Region',
+        'place': 'Place', 'lat_lon': 'Latitude / longitude', 'temp_unit': 'Temperature', 'holidays': 'Public holidays', 'country': 'Country', 'region': 'Region',
         'holidays_hint': 'empty = no holidays',
         'btn_save': 'Save settings', 'log': 'Log', 'log_empty': 'No entries yet',
         'done': 'done', 'failed': 'failed',

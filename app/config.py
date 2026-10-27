@@ -13,7 +13,7 @@ DEFAULTS = {
     'plan_lang': 'en',
     # role "events" shows entries as appointments, "todos" puts every entry on the to-do list
     'calendars': [],
-    'weather': {'enabled': True, 'name': '', 'lat': None, 'lon': None},
+    'weather': {'enabled': True, 'name': '', 'lat': None, 'lon': None, 'unit': 'F'},  # unit: 'F' or 'C'
     'holidays': {'country': '', 'subdiv': ''},
     'schedule': {'enabled': True, 'start': '07:00', 'end': '10:00', 'days': [0, 1, 2, 3, 4, 5, 6]},
     'dim_past_events': True,

@@ -117,6 +117,8 @@ def weather(cfg, day, w):
         hint = None
     if 30 <= rain < 50:
         text += f", {rain} % {w['rain']}"
+    if loc.get('unit', 'F') == 'F':
+        tmax, tmin = tmax * 9 / 5 + 32, tmin * 9 / 5 + 32  # the hints above use Celsius thresholds
     return {'icon': icon, 'max': round(tmax), 'min': round(tmin), 'text': text, 'hint': hint}
 
 
