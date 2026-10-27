@@ -172,6 +172,18 @@ TODO_FULL, TODO_SMALLEST = 80, 46   # text size of a to-do line, normal and the 
 FOOTER = 62                          # the small "(… not shown)" line
 
 
+def hint_lines(d, hint, room):
+    """Two lines from the hint: split at '|'; else before a second 'Alexa,'; else wrapped to fit."""
+    if '|' in hint:
+        return [t.strip() for t in hint.split('|') if t.strip()][:2]
+    second = hint.find('Alexa,', 1)
+    if second > 0:
+        return [hint[:second].strip(' ,·;'), hint[second:].strip()]
+    if d.textlength(hint, font=font(40, 'Medium')) <= room:
+        return [hint]
+    return wrap(d, hint, font(34, 'Medium'), room, max_lines=2)
+
+
 def todo_row(size):
     """Row height: airy at full size, tighter as the text shrinks for a long list."""
     return round(size * (1.56 if size >= 70 else 1.38))
@@ -398,10 +410,11 @@ def render(day, out, background_path=None):
     d.text((c1[0] + 14, M + 220), L['date'].format(day=date.day, month=L['months'][date.month - 1]), font=font(96, 'Medium'), fill=SOFT)
     month(d, date, c1[0] + 70, top + 50, c1[1] - c1[0] - 140, row=74 if bar else 86)
 
-    # A quiet reminder of how to add or tick off tasks, right of the title: two lines, split at '|'.
+    # A quiet reminder of how to add or tick off tasks, right of the title, on two lines.
     hint = (day.get('todo_hint') or '').strip()
     if hint:
-        lines = [t.strip() for t in hint.split('|') if t.strip()][:2]
+        lines = hint_lines(d, hint, c1[1] - c1[0] - 140 - d.textlength(day.get('todo_title', L['todos']),
+                                                                     font=font(86, 'DemiBold')) - 50)
         size = 40
         room = c1[1] - 70 - (c1[0] + 70 + d.textlength(day.get('todo_title', L['todos']), font=font(86, 'DemiBold')) + 50)
         while size > 28 and max(d.textlength(t, font=font(size, 'Medium')) for t in lines) > room:

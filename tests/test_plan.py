@@ -291,3 +291,17 @@ def test_one_wake_attempt_per_window_even_if_it_fails_or_the_app_restarts(monkey
     jobs.save_state(dict(jobs.load_state(), shown_on='2026-10-27'))
     jobs.tick(cfg, datetime.datetime(2026, 10, 28, 7, 0, tzinfo=TZ), {})
     assert calls['wake'] == 2
+
+
+def test_todo_hint_always_two_lines_when_it_has_two_parts():
+    import render
+    from PIL import Image, ImageDraw
+    render.L = render.LABELS['en']
+    d = ImageDraw.Draw(Image.new('RGB', (8, 8)))
+    want = ['Alexa, add [task] to my to-do list', 'Alexa, mark [task] as complete']
+    assert render.hint_lines(d, 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete', 650) == want
+    assert render.hint_lines(d, 'Alexa, add [task] to my to-do list Alexa, mark [task] as complete', 650) == want
+    assert render.hint_lines(d, 'Alexa, add [task] to my to-do list. Alexa, mark [task] as complete', 650) == [
+        'Alexa, add [task] to my to-do list.', 'Alexa, mark [task] as complete']
+    long = 'Say add followed by the task to put it on the list, or mark it done in the app when finished'
+    assert len(render.hint_lines(d, long, 650)) == 2
