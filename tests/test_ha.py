@@ -183,3 +183,17 @@ def test_todo_items_reads_the_service_response(monkeypatch):
     assert sent['json'] == {'entity_id': ['todo.my_tasks'], 'status': 'needs_action'}
     assert out == {'todo.my_tasks': [{'summary': 'Book flights', 'due': None},
                                      {'summary': 'Call the plumber', 'due': '2026-10-27'}]}
+
+
+def test_weather_panel_shows_the_sky_right_now(monkeypatch):
+    import datetime
+    import zoneinfo
+    import plan_data
+    monkeypatch.setattr(ha, 'snapshot', lambda cfg: _snap(**{'weather.nws_33_7762171_118_3561558_khhr': {'state': 'sunny'}}))
+    monkeypatch.setattr(plan_data, 'weather', lambda cfg, day, w: {'icon': '☁️', 'max': 73, 'min': 58, 'text': 'Cloudy', 'hint': None})
+    cfg = config.load()
+    cfg['home_assistant'].update(url='http://ha', token='t')
+    cfg['weather'].update(enabled=True, lat=33.77, lon=-118.36)
+    data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 12, tzinfo=zoneinfo.ZoneInfo('America/Los_Angeles')))
+    assert data['weather']['icon'] == '☀️' and data['weather']['text'] == 'Sunny now' and data['weather']['max'] == 73
+    assert 'sky' not in data['home']

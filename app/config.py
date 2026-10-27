@@ -28,6 +28,7 @@ DEFAULTS = {
         'dishwasher_clean': 'input_boolean.dishwasher_clean',  # on = cycle finished, door not opened since
         'wind_7d': 'input_number.rolling_hills_max_wind_7_day',
         'rain_7d': 'input_number.rolling_hills_rain_7_day',
+        'conditions': 'weather.nws_33_7762171_118_3561558_khhr',  # current sky (NWS observation) for the weather panel
         'last_bottle': 'sensor.finn_bottle',   # Huckleberry: time of the last bottle
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
     }, 'show_minutes': 30,

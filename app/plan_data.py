@@ -27,13 +27,22 @@ WEATHER_CODES = {
     95: ('⛈️', 'Gewitter', 'Thunderstorm'), 96: ('⛈️', 'Gewitter mit Hagel', 'Thunderstorm with hail'),
     99: ('⛈️', 'Gewitter mit Hagel', 'Thunderstorm with hail'),
 }
+# Home Assistant weather conditions → emoji, German text, English text (the sky right now)
+HA_CONDITIONS = {
+    'sunny': ('☀️', 'Sonnig', 'Sunny'), 'clear-night': ('🌙', 'Klar', 'Clear'),
+    'partlycloudy': ('⛅', 'Teilweise bewölkt', 'Partly cloudy'), 'cloudy': ('☁️', 'Bewölkt', 'Cloudy'),
+    'fog': ('🌫️', 'Neblig', 'Foggy'), 'rainy': ('🌧️', 'Regen', 'Rain'), 'pouring': ('🌧️', 'Starker Regen', 'Heavy rain'),
+    'lightning': ('⛈️', 'Gewitter', 'Thunderstorm'), 'lightning-rainy': ('⛈️', 'Gewitter', 'Thunderstorm'),
+    'snowy': ('🌨️', 'Schnee', 'Snow'), 'snowy-rainy': ('🌨️', 'Schneeregen', 'Sleet'), 'hail': ('🌨️', 'Hagel', 'Hail'),
+    'windy': ('💨', 'Windig', 'Windy'), 'windy-variant': ('💨', 'Windig', 'Windy'),
+}
 WORDS = {
     'de': {'all_day': 'Ganztägig', 'holiday': 'Feiertag', 'changeable': 'Wechselhaft', 'rain': 'Regen',
            'hint_rain': 'Regenjacke mitnehmen', 'hint_cold': 'Warme Jacke anziehen',
-           'hint_cool': 'Pulli oder Jacke mitnehmen', 'hint_hot': 'Viel trinken und Sonnencreme'},
+           'hint_cool': 'Pulli oder Jacke mitnehmen', 'hint_hot': 'Viel trinken und Sonnencreme', 'now': 'Jetzt: {}'},
     'en': {'all_day': 'All day', 'holiday': 'Holiday', 'changeable': 'Changeable', 'rain': 'rain',
            'hint_rain': 'Bring a rain jacket', 'hint_cold': 'Wear a warm coat',
-           'hint_cool': 'Bring a jumper or jacket', 'hint_hot': 'Drink plenty, wear sunscreen'},
+           'hint_cool': 'Bring a sweater or jacket', 'hint_hot': 'Drink plenty, wear sunscreen', 'now': '{} now'},
 }
 
 
@@ -170,6 +179,10 @@ def home(cfg, now=None):
         if 0 <= mins < 24 * 60:  # older than a day means stale data, not a hungry baby
             out['bottle'] = {'at': at.strftime('%-I:%M %p'), 'ago': f'{int(mins // 60)}h {int(mins % 60)}m'
                              if mins >= 60 else f'{int(mins)}m'}
+    sky = get('conditions')
+    if sky and sky.get('state') in HA_CONDITIONS:
+        icon, de, en = HA_CONDITIONS[sky['state']]
+        out['sky'] = {'icon': icon, 'text': de if cfg.get('plan_lang') == 'de' else en}
     dish = get('dishwasher_clean')
     if dish and dish.get('state') == 'on':
         out['dishwasher_clean'] = True
@@ -233,6 +246,10 @@ def build(cfg, now):
     if ha.configured(cfg):
         try:
             data['home'], data['week'] = home(cfg, now)
+            sky = data['home'].pop('sky', None)
+            if sky and data['weather']:  # the sky right now beats the day's worst-case code
+                rain = data['weather']['text'].partition(', ')[2]  # keep "30 % rain" from the forecast
+                data['weather'].update(icon=sky['icon'], text=w['now'].format(sky['text']) + (f', {rain}' if rain else ''))
         except Exception as e:  # noqa: BLE001  Home Assistant down: the plan appears without it
             errors.append(f'Home Assistant: {e}')
     for e in data['today'] + data['tomorrow']:
