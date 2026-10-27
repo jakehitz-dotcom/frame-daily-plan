@@ -33,6 +33,7 @@ DEFAULTS = {
     }, 'show_minutes': 30,
         'todo_lists': [],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
     },
+    'todo_hint': 'Alexa, ask Easy Task to: add [task] OR complete [task]',  # beside the To do title; '' = none
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }
 

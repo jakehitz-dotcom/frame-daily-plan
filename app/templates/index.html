@@ -153,6 +153,7 @@
         <label class="inline"><input type="radio" name="background" value="artwork" {% if cfg.background == 'artwork' %}checked{% endif %}> {{ t.bg_artwork }}</label>
         <label class="inline"><input type="radio" name="background" value="default" {% if cfg.background != 'artwork' %}checked{% endif %}> {{ t.bg_default }}</label>
       </div>
+      <label for="todo_hint">{{ t.todo_hint }}</label><input type="text" id="todo_hint" name="todo_hint" value="{{ cfg.todo_hint }}">
       <label>{{ t.past_events }}</label>
       <label class="inline"><input type="checkbox" name="dim_past_events" {% if cfg.dim_past_events %}checked{% endif %}> {{ t.grey_out }}</label>
     </div>

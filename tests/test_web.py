@@ -36,3 +36,14 @@ def test_bad_timezone_is_ignored():
     c = client()
     c.post('/set-place', data={'label': 'X', 'lat': '1', 'lon': '2', 'timezone': 'Not/AZone', 'country_code': ''})
     assert config.load()['timezone'] != 'Not/AZone'
+
+
+def test_todo_hint_setting_saves_and_reaches_the_plan():
+    import datetime
+    import zoneinfo
+    import plan_data
+    cfg = config.load()
+    assert cfg['todo_hint'].startswith('Alexa, ask Easy Task to:')
+    cfg['weather']['enabled'] = False
+    data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 8, tzinfo=zoneinfo.ZoneInfo('Europe/London')))
+    assert data['todo_hint'] == cfg['todo_hint']

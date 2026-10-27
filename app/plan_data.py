@@ -220,6 +220,7 @@ def build(cfg, now):
             data['weather'] = weather(cfg, today, w)
         except Exception as e:  # noqa: BLE001  the plan must still appear without weather
             errors.append(f'Weather: {e}')
+    data['todo_hint'] = cfg.get('todo_hint', '')
     lists = (cfg.get('home_assistant') or {}).get('todo_lists') or []
     if lists and ha.configured(cfg):
         try:  # due today, overdue or undated; tasks dated later wait for their day

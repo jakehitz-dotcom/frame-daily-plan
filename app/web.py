@@ -259,6 +259,8 @@ def save_settings():
     cfg['holidays'] = {'country': f.get('hol_country', '').strip().upper(), 'subdiv': f.get('hol_subdiv', '').strip().upper()}
     cfg['dim_past_events'] = 'dim_past_events' in f
     cfg['background'] = f.get('background', 'artwork')
+    if 'todo_hint' in f:
+        cfg['todo_hint'] = f['todo_hint'].strip()
     calendars = []
     for i in range(int(f.get('cal_count', 0)) + 1):  # the extra row adds a new calendar
         url = f.get(f'cal_url{i}', '').strip()
