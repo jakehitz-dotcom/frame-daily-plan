@@ -282,7 +282,10 @@ def build(cfg, now):
     lists = (cfg.get('home_assistant') or {}).get('todo_lists') or []
     if lists and ha.configured(cfg):
         try:  # due today, overdue or undated; tasks dated later wait for their day
-            for entity, items in ha.todo_items(lists, cfg).items():
+            lists, missing = ha.resolve_todo_lists(lists, cfg)
+            if missing:
+                errors.append(f"To-do lists not found in Home Assistant: {', '.join(missing)}")
+            for entity, items in (ha.todo_items(lists, cfg) if lists else {}).items():
                 data['todos'] = sorted(set(data['todos']) | {i['summary'] for i in items
                                                              if not i['due'] or i['due'] <= today.isoformat()})
         except Exception as e:  # noqa: BLE001

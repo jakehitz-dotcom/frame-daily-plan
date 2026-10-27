@@ -101,6 +101,8 @@ def preview(cfg):
     """Render without touching the TV (uses the last known artwork as background)."""
     data = plan_data.build(cfg, now_local(cfg))
     render.render(data, PREVIEW, cached_artwork(cfg, load_state()))
+    log('Preview created' + (f' · notes: {"; ".join(data["errors"])}' if data['errors'] else '')
+        + (f' · to-dos: {len(data["todos"])}' if data['todos'] else ''))
     return data
 
 

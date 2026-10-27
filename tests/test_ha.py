@@ -210,3 +210,22 @@ def test_weather_panel_uses_ktoa_now_and_the_nws_outlook(monkeypatch):
     data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 12, tzinfo=la))
     assert data['weather']['text'] == 'Cloudy' and 'outlook' not in data['weather']   # forecast still shown
     assert any('NWS' in e for e in data['errors'])
+
+
+def test_task_list_by_name_or_entity_and_unknown_ones_reported(monkeypatch):
+    lists = [{'entity_id': 'todo.jake_hitzeroth_s_list', 'state': '2', 'attributes': {'friendly_name': "Jake hitzeroth's list"}},
+             {'entity_id': 'todo.shopping_list', 'state': '0', 'attributes': {'friendly_name': 'Shopping List'}}]
+    monkeypatch.setattr(ha, 'states', lambda cfg=None, domain=None: lists)
+    assert ha.resolve_todo_lists(["Jake hitzeroth's list", 'shopping list']) == (
+        ['todo.jake_hitzeroth_s_list', 'todo.shopping_list'], [])
+    assert ha.resolve_todo_lists(['Groceries', 'todo.shopping_list']) == (['todo.shopping_list'], ['Groceries'])
+    assert ha.resolve_todo_lists(['todo.jake_hitzeroth_s_list']) == (['todo.jake_hitzeroth_s_list'], [])
+
+
+def test_connection_test_names_the_to_do_lists():
+    cfg = {'home_assistant': {'url': fake_server(), 'token': TOKEN}}
+    STATES.append({'entity_id': 'todo.jake_hitzeroth_s_list', 'state': '2', 'attributes': {}})
+    try:
+        assert ha.check(cfg).endswith('to-do lists: todo.jake_hitzeroth_s_list')
+    finally:
+        STATES.pop()

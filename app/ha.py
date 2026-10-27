@@ -38,13 +38,34 @@ def _get(path, cfg=None):
 def check(cfg=None):
     """One line for the log: does the connection work, which version, how many entities."""
     info = _get('config', cfg)
-    states = _get('states', cfg)
-    return f"ok · {info.get('location_name', 'Home')} · version {info.get('version', '?')} · {len(states)} entities"
+    everything = _get('states', cfg)
+    lists = [s['entity_id'] for s in everything if s['entity_id'].startswith('todo.')]
+    return (f"ok · {info.get('location_name', 'Home')} · version {info.get('version', '?')} · {len(everything)} entities"
+            + (f" · to-do lists: {', '.join(lists)}" if lists else ''))
 
 
 def state(entity_id, cfg=None):
     """One entity, e.g. state('sensor.outdoor_temperature') → {'state': '18.5', 'attributes': {...}, ...}"""
     return _get(f'states/{entity_id}', cfg)
+
+
+def resolve_todo_lists(names, cfg=None):
+    """Entity IDs for the configured lists; a list can also be given by its name ("Jake's list")."""
+    wanted = [n.strip() for n in names if n.strip()]
+    if all(n.startswith('todo.') for n in wanted):
+        return wanted, []
+    lists = {s['entity_id']: (s.get('attributes') or {}).get('friendly_name', '') for s in states(cfg, 'todo')}
+    found, missing = [], []
+    for n in wanted:
+        match = n if n in lists else next((e for e, name in lists.items() if name.lower() == n.lower()), None)
+        (found if match else missing).append(match or n)
+    return found, missing
+
+
+def todo_lists(cfg=None):
+    """[(entity_id, name, open items)] for every to-do list in Home Assistant."""
+    return [(s['entity_id'], (s.get('attributes') or {}).get('friendly_name', ''), s.get('state'))
+            for s in states(cfg, 'todo')]
 
 
 def todo_items(entity_ids, cfg=None):

@@ -32,7 +32,7 @@ DEFAULTS = {
         'last_bottle': 'sensor.finn_bottle',   # Huckleberry: time of the last bottle
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
     }, 'show_minutes': 30,
-        'todo_lists': [],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
+        'todo_lists': ['todo.jake_hitzeroth_s_list'],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
     },
     # Banner across the top of the plan: a custom message wins over birthdays, which win over holidays.
     'banner': {'text': '', 'until': ''},  # until: last day shown (YYYY-MM-DD), '' = until cleared
