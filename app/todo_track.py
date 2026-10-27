@@ -40,18 +40,33 @@ def poll(cfg, now=None):
         return []  # integration reconnecting: an empty answer now would look like everything was completed
     items = ha.todo_items(live, cfg)
     data = _load()
+    data.setdefault('seen_done', {})
     newly = []
+
+    def record(entity, summary):
+        if not any(d['summary'] == summary and d.get('list') == entity
+                   and now - datetime.datetime.fromisoformat(d['at']) < datetime.timedelta(hours=18) for d in data['done']):
+            data['done'].append({'summary': summary, 'at': now.isoformat(), 'list': entity})
+            newly.append(summary)
     for entity in live:
-        current = {i.get('uid') or i['summary']: i['summary'] for i in items.get(entity, []) if not i['done']}
-        before = data['seen'].get(entity)
-        if before is not None:  # the first look only sets the baseline
-            for key, summary in before.items():
-                if key not in current:
-                    data['done'].append({'summary': summary, 'at': now.isoformat(), 'list': entity})
-                    newly.append(summary)
-        reopened = set(current.values())
+        key = lambda i: i.get('uid') or i['summary']  # noqa: E731
+        open_now = {key(i): i['summary'] for i in items.get(entity, []) if not i['done']}
+        # Alexa keeps tasks marked complete (by voice) but with no time, and drops ones deleted or
+        # checked off in some apps: both count as completed the first time the app sees them so.
+        done_now = {key(i): i['summary'] for i in items.get(entity, []) if i['done'] and not i.get('completed')}
+        open_before = data['seen'].get(entity)
+        done_before = data['seen_done'].get(entity, {})
+        if open_before is not None:  # the very first look only sets the baseline
+            for k, summary in done_now.items():
+                if k not in done_before:
+                    record(entity, summary)
+            for k, summary in open_before.items():
+                if k not in open_now and k not in done_now:
+                    record(entity, summary)
+        reopened = set(open_now.values())
         data['done'] = [d for d in data['done'] if not (d.get('list') == entity and d['summary'] in reopened)]
-        data['seen'][entity] = current
+        data['seen'][entity] = open_now
+        data['seen_done'][entity] = done_now
     data['done'] = [d for d in data['done'] if now - datetime.datetime.fromisoformat(d['at']) < KEEP]
     _save(data)
     return newly
