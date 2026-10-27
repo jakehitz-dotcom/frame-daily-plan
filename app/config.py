@@ -21,6 +21,8 @@ DEFAULTS = {
     'schedule': {'enabled': True, 'start': '07:00', 'end': '10:00', 'days': [0, 1, 2, 3, 4, 5, 6],
                  'refresh_minutes': 5},  # 0 = show once per morning
     'dim_past_events': True,
+    # The week ahead (Mon-Sun) instead of the daily plan in this window; day: 0 = Monday ... 6 = Sunday
+    'week_view': {'enabled': True, 'day': 6, 'start': '17:00', 'end': '21:00'},
     # read-only REST access, see ha.py; entities: which Home Assistant entities feed the plan ('' = not shown)
     'home_assistant': {'url': '', 'token': '', 'entities': {
         'thermostat': 'climate.den_thermostat',            # inside temperature + set temperature by mode

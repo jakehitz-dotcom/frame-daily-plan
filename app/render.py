@@ -38,7 +38,9 @@ LABELS = {
            'bottle': 'Letzte Flasche {}', 'ago': 'vor {}', 'hilo': 'Hoch {}°  ·  Tief {}°',
            'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': '6+ {}–{}',
            'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet',
-           'xmas_days': 'Tage bis Weihnachten', 'xmas_tomorrow': 'Morgen ist Weihnachten!'},
+           'xmas_days': 'Tage bis Weihnachten', 'xmas_tomorrow': 'Morgen ist Weihnachten!',
+           'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'at_a_glance': 'Die Woche auf einen Blick',
+           'nothing_planned': 'Nichts geplant'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
                       'October', 'November', 'December'],
@@ -51,7 +53,9 @@ LABELS = {
            'bottle': 'Last bottle {}', 'ago': '{} ago', 'hilo': 'High {}°  ·  Low {}°',
            'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': '6+ {}–{}',
            'quiet': 'Quiet week ahead: no storms or rain expected',
-           'xmas_days': 'days until Christmas', 'xmas_tomorrow': 'Christmas is tomorrow!'},
+           'xmas_days': 'days until Christmas', 'xmas_tomorrow': 'Christmas is tomorrow!',
+           'week_ahead': 'The week ahead', 'updated': 'updated {}', 'at_a_glance': 'Week at a glance',
+           'nothing_planned': 'Nothing planned'},
 }
 L = LABELS['de']  # set per render
 
@@ -552,3 +556,96 @@ def render_text(text, out, theme='dark'):
         d.text((W // 2, y), line, font=f, fill=ink, anchor='mm')
         y += line_h
     im.save(out, quality=92)
+
+
+# ── The week ahead (Sunday evenings) ───────────────────────────────────────────────────────────
+RAIN_BLUE = (120, 170, 245)
+PILL = ((70, 62, 44, 230), (245, 205, 140))
+
+
+def week_range(start, end):
+    s, e = datetime.date.fromisoformat(start), datetime.date.fromisoformat(end)
+    months = LABELS['en']['months']
+    if s.month == e.month:
+        return f'{months[s.month - 1]} {s.day} – {e.day}'
+    return f'{months[s.month - 1][:3]} {s.day} – {months[e.month - 1][:3]} {e.day}'
+
+
+def week_day_column(layer, txt, d, day, x0, x1, top, bottom):
+    ld = ImageDraw.Draw(layer)
+    panel(layer, (round(x0), top, round(x1), bottom))
+    x, w = x0 + 40, x1 - x0 - 80
+    d.text((x, top + 40), day['weekday'], font=font(74, 'DemiBold'), fill=CREAM)
+    d.text((x1 - 40, top + 40), str(day['day']), font=font(74, 'DemiBold'), fill=SOFT, anchor='ra')
+    y = top + 150
+    wx = day.get('weather')
+    if wx:
+        emoji(txt, wx['icon'], x, y, 92)
+        hf = font(70, 'DemiBold')
+        d.text((x + 110, y - 4), f"{wx['hi']}°", font=hf, fill=CREAM)
+        if wx.get('lo') is not None:
+            d.text((x + 110 + d.textlength(f"{wx['hi']}°", font=hf) + 14, y + 16), f"{wx['lo']}°", font=font(50, 'Medium'), fill=DIM)
+        wet = (wx.get('pop') or 0) >= 30
+        text = wx['text'] + (f" · {wx['pop']}%" if wet else '')
+        size, lines = fit_lines(d, text, 'Medium', w, 44, 36, 1)
+        d.text((x, y + 108), lines[0], font=font(size, 'Medium'), fill=RAIN_BLUE if wet else SOFT)
+    y += 185
+    ld.line([(x, y), (x + w, y)], fill=(64, 68, 78, 255), width=3)
+    y += 26
+    for pill in day.get('pills', [])[:2]:
+        pf = font(42, 'DemiBold')
+        size, lines = fit_lines(d, pill, 'DemiBold', w - 36, 42, 34, 1)
+        pw = rich_width(d, lines[0], size, 'DemiBold') + 36
+        ld.rounded_rectangle((round(x), y, round(x + min(pw, w)), y + 62), radius=31, fill=PILL[0])
+        draw_rich(txt, d, lines[0], x + 18, y + 8 + (42 - size) // 2, size, 'DemiBold', PILL[1])
+        y += 80
+    events = day.get('events', [])
+    tf = font(50, 'DemiBold')
+    for k, ev in enumerate(events):
+        lines = wrap(d, ev['title'], tf, w - 30)
+        need = 54 + len(lines) * 60 + 26
+        if y + need > bottom - 30 - (60 if k < len(events) - 1 else 0):
+            d.text((x, y), f'+{len(events) - k} more', font=font(46, 'Medium'), fill=DIM)
+            return
+        ld.rounded_rectangle((round(x), y + 6, round(x) + 9, y + need - 26), radius=4,
+                             fill=COLORS.get(ev.get('color', 'green'), COLORS['green']) + (255,))
+        d.text((x + 28, y), ev['start'], font=font(42, 'Medium'), fill=SOFT)
+        for i, line in enumerate(lines):
+            d.text((x + 28, y + 52 + i * 60), line, font=tf, fill=CREAM)
+        y += need
+    if not events and not day.get('pills'):
+        d.text((x, y), L['nothing_planned'], font=font(46, 'Medium'), fill=DIM)
+
+
+def render_week(week, out, background_path=None):
+    """Seven columns, Monday to Sunday, and a short 'week at a glance' underneath."""
+    global L
+    L = LABELS.get(week.get('lang', 'en'), LABELS['en'])
+    bg = background(background_path).convert('RGBA')
+    layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    txt = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(txt)
+    d.text((M + 10, M - 40), L['week_ahead'], font=font(150, 'Bold'), fill=CREAM)
+    d.text((M + 14, M + 150), week_range(week['start'], week['end']), font=font(80, 'Medium'), fill=SOFT)
+    d.text((W - M, M + 170), L['updated'].format(week['updated']), font=font(50, 'Medium'), fill=DIM, anchor='rs')
+    summary = week.get('summary') or []
+    rows = (len(summary) + 1) // 2
+    gap, top = 28, 450
+    bottom = H - 90 - (150 + rows * 78 + 40 if summary else 0) - (50 if summary else 0)
+    cw = (W - 2 * M - 6 * gap) / 7
+    for i, day in enumerate(week['days']):
+        x0 = M + i * (cw + gap)
+        week_day_column(layer, txt, d, day, x0, x0 + cw, top, bottom)
+    if summary:
+        sy0 = bottom + 50
+        panel(layer, (M, sy0, W - M, H - 90))
+        d.text((M + 70, sy0 + 40), L['at_a_glance'], font=font(64, 'DemiBold'), fill=CREAM)
+        colw = (W - 2 * M - 140 - 80) / 2
+        for k, (icon, text) in enumerate(summary):
+            cx = M + 70 + (k % 2) * (colw + 80)
+            cy = sy0 + 140 + (k // 2) * 78
+            emoji(txt, icon, cx, cy + 2, 54)
+            size, lines = fit_lines(d, text, 'Medium', colw - 80, 48, 40, 1)
+            line = lines[0] if lines[0] == text else lines[0].rstrip(' ,·') + '…'
+            d.text((cx + 76, cy + (48 - size) // 2), line, font=font(size, 'Medium'), fill=SOFT)
+    Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=90)

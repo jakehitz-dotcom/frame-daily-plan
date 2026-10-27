@@ -156,6 +156,11 @@
         <label class="inline"><input type="checkbox" name="schedule_enabled" {% if cfg.schedule.enabled %}checked{% endif %}> {{ t.active }}</label>
         {{ t.from }} <input type="time" name="start" value="{{ cfg.schedule.start }}"> {{ t.to }} <input type="time" name="end" value="{{ cfg.schedule.end }}"> {{ t.oclock }}
       </div>
+      <label>{{ t.week_view }}</label>
+      <div class="row"><label class="inline"><input type="checkbox" name="week_enabled" {% if cfg.week_view.enabled %}checked{% endif %}> {{ t.week_label }}</label>
+        <select name="week_day" style="width:150px">{% for name in t.day_names %}<option value="{{ loop.index0 }}" {{ 'selected' if loop.index0 == cfg.week_view.day }}>{{ name }}</option>{% endfor %}</select>
+        {{ t.from }} <input type="time" name="week_start" value="{{ cfg.week_view.start }}"> {{ t.to }} <input type="time" name="week_end" value="{{ cfg.week_view.end }}">
+        <button formaction="{{ url_for('preview_week') }}" formnovalidate>{{ t.btn_preview_week }}</button></div>
       <label for="tv_mac">{{ t.wake }}</label>
       <div class="row"><label class="inline"><input type="checkbox" name="wake_tv" {% if cfg.wake_tv %}checked{% endif %}> {{ t.wake_label }}</label>
         <input type="text" id="tv_mac" name="tv_mac" value="{{ cfg.tv_mac or state.tv_mac or '' }}" placeholder="{{ t.mac_ph }}" style="width:220px">

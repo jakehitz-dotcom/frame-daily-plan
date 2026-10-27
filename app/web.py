@@ -258,6 +258,11 @@ def save_settings():
     })
     cfg['holidays'] = {'country': f.get('hol_country', '').strip().upper(), 'subdiv': f.get('hol_subdiv', '').strip().upper()}
     cfg['dim_past_events'] = 'dim_past_events' in f
+    if 'week_start' in f:
+        cfg['week_view'] = {'enabled': 'week_enabled' in f, 'day': int(f.get('week_day', 6)),
+                            'start': f.get('week_start', '17:00'), 'end': f.get('week_end', '21:00')}
+        if cfg['week_view']['start'] >= cfg['week_view']['end']:
+            return redirect(url_for('index', msg=ui()['end_after_start']))
     cfg['background'] = f.get('background', 'artwork')
     if 'todo_hint' in f:
         cfg['todo_hint'] = f['todo_hint'].strip()
@@ -287,6 +292,12 @@ def _read_ha_fields(f, cfg):
     cfg['home_assistant'] = dict(cur, url=url, token=f.get('ha_token', '').strip() or cur.get('token', ''))
     if 'ha_todo_lists' in f:
         cfg['home_assistant']['todo_lists'] = [e.strip() for e in f['ha_todo_lists'].split(',') if e.strip()]
+
+
+@app.post('/preview-week')
+@protected
+def preview_week():
+    return run_action('a_preview_week', lambda: jobs.preview_week(config.load()))
 
 
 @app.post('/banner')

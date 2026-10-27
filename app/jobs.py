@@ -14,6 +14,7 @@ import ha
 import plan_data
 import render
 import tv
+import week
 
 STATE_FILE = os.path.join(config.DATA, 'state.json')
 LOG_FILE = os.path.join(config.DATA, 'frame-daily-plan.log')
@@ -97,6 +98,14 @@ def artwork_background(cfg, a, content_id):
     return path if os.path.exists(path) else None
 
 
+def preview_week(cfg):
+    """The week ahead as it would look now, without touching the TV."""
+    data = week.build(cfg, now_local(cfg))
+    render.render_week(data, PREVIEW, cached_artwork(cfg, load_state()))
+    log('Week preview created' + (f' · notes: {"; ".join(data["errors"])}' if data['errors'] else ''))
+    return data
+
+
 def preview(cfg):
     """Render without touching the TV (uses the last known artwork as background)."""
     data = plan_data.build(cfg, now_local(cfg))
@@ -162,14 +171,25 @@ def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False, wo
 
 
 def show_plan(cfg, refresh=False, woke=False, until=None):
+    """The current view: the week ahead in its Sunday-evening window, otherwise the daily plan."""
+    now = now_local(cfg)
+    view = view_for(cfg, now) or 'day'
+
     def make(a, state):
-        data = plan_data.build(cfg, now_local(cfg))
-        render.render(data, LAST_IMAGE, artwork_background(cfg, a, state.get('restore_id')))
+        bg = artwork_background(cfg, a, state.get('restore_id'))
+        if view == 'week':
+            data = week.build(cfg, now)
+            render.render_week(data, LAST_IMAGE, bg)
+        else:
+            data = plan_data.build(cfg, now)
+            render.render(data, LAST_IMAGE, bg)
         return data['errors']
-    state = put_temporary(cfg, make, 'Plan updated' if refresh else 'Plan', kind='plan', only_if_changed=refresh,
+    what = 'Week ahead' if view == 'week' else 'Plan'
+    state = put_temporary(cfg, make, f'{what} updated' if refresh else what, kind='plan', only_if_changed=refresh,
                           woke=woke, until=until)
-    if in_window(cfg, now_local(cfg)):  # a manual plan at 06:30 must not stop the 07:00 one
-        state['shown_on'] = now_local(cfg).date().isoformat()
+    if in_window(cfg, now):  # a manual plan at 06:30 must not stop the 07:00 one
+        state['shown_on'] = now.date().isoformat()
+        state['shown_view'] = view
         save_state(state)
 
 
@@ -245,10 +265,27 @@ def upload_artwork(cfg, src_path, mode='crop'):
         return cid
 
 
-def in_window(cfg, now):
+def in_day_window(cfg, now):
     sch = cfg['schedule']
     return (bool(sch.get('enabled')) and now.weekday() in sch.get('days', [])
             and sch['start'] <= now.strftime('%H:%M') < sch['end'])
+
+
+def in_week_window(cfg, now):
+    wv = cfg.get('week_view') or {}
+    return (bool(wv.get('enabled')) and now.weekday() == int(wv.get('day', 6))
+            and wv.get('start', '17:00') <= now.strftime('%H:%M') < wv.get('end', '21:00'))
+
+
+def view_for(cfg, now):
+    """'week' in the week-ahead window (it wins if the two overlap), 'day' in the daily window, else None."""
+    if in_week_window(cfg, now):
+        return 'week'
+    return 'day' if in_day_window(cfg, now) else None
+
+
+def in_window(cfg, now):
+    return view_for(cfg, now) is not None
 
 
 def _due(cfg, state, now):
@@ -258,9 +295,10 @@ def _due(cfg, state, now):
         return 'restore'  # asked to hide while the TV slept: do it the moment it wakes
     every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
     refresh = 'refresh' if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every else None
-    if in_window(cfg, now):
-        if state.get('shown_on') != now.date().isoformat():
-            return 'show'
+    view = view_for(cfg, now)
+    if view:
+        if state.get('shown_on') != now.date().isoformat() or state.get('shown_view', 'day') != view:
+            return 'show'  # also when Sunday's morning plan gives way to the week ahead
         return refresh  # a message, demo or "Back to artwork" in between is left alone
     until = state.get('until') or 0
     if until > now.timestamp():
