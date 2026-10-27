@@ -191,13 +191,14 @@ def test_voice_request_shows_for_30_minutes_then_restores():
 
 
 def test_show_button_press_is_acted_on_once(monkeypatch):
-    presses = iter(['2026-10-27T08:00:00', '2026-10-27T08:00:00', '2026-10-27T19:04:11', '2026-10-27T19:04:11'])
+    presses = iter(['2026-10-27T08:00:00', '2026-10-27T08:00:00', '2026-10-27T19:04:11', '2026-10-27T19:04:11'] * 2)
     shown = []
     monkeypatch.setattr(jobs.ha, 'configured', lambda cfg: True)
     monkeypatch.setattr(jobs.ha, 'state', lambda entity, cfg: {'state': next(presses)})
     monkeypatch.setattr(jobs, 'show_for', lambda cfg, minutes: shown.append(minutes))
     monkeypatch.setattr(jobs.config, 'load', lambda: dict(CFG, home_assistant={
         'url': 'http://ha', 'token': 't', 'show_minutes': 30, 'entities': {'show_button': 'input_button.frame_planner_show'}}))
+    monkeypatch.setattr(jobs, 'hide', lambda cfg: shown.append('hide'))
     sleeps = []
 
     def fake_sleep(s):
@@ -237,3 +238,39 @@ def test_todo_overflow_rules():
     assert render.TODO_SMALLEST <= size < 80 and shown == o(5) and foot is None
     size, shown, done, foot = render.plan_todos(o(12), c(2), three)                  # 4. smallest + count
     assert size == render.TODO_SMALLEST and foot == f'({12 - len(shown)} more to do · 2 completed not shown)'
+
+
+def test_hide_while_asleep_restores_on_wake_even_inside_the_window(monkeypatch):
+    d = lambda h, m=0: datetime.datetime(2026, 10, 27, h, m, tzinfo=TZ)
+    jobs.save_state({'plan_ids': ['MY_F1'], 'shown_on': '2026-10-27', 'showing': 'plan', 'shown_at': d(7).timestamp(),
+                     'restore_due': True, 'tv_mac': 'aa:bb:cc:dd:ee:ff'})
+    awake = [False]
+    calls = _sleepy_tv(monkeypatch, awake, wakes=True)
+    jobs.hide(dict(CFG, tv_ip='192.0.2.1'))
+    assert jobs.load_state()['hide_pending'] and calls['wake'] == 0          # not woken just to hide
+    assert jobs.tick(dict(CFG, wake_tv=True), d(8), {}) is None              # still asleep
+    awake[0] = True
+    assert jobs.tick(dict(CFG, wake_tv=True), d(8, 5), {}) == 'restore'      # first thing on waking
+
+
+def test_hide_button_press_is_acted_on(monkeypatch):
+    seq = {'input_button.frame_planner_show': iter(['a'] * 3), 'input_button.frame_planner_hide': iter(['x', 'x', 'y'])}
+    done = []
+    monkeypatch.setattr(jobs.ha, 'configured', lambda cfg: True)
+    monkeypatch.setattr(jobs.ha, 'state', lambda entity, cfg: {'state': next(seq[entity])})
+    monkeypatch.setattr(jobs, 'show_for', lambda cfg, minutes: done.append('show'))
+    monkeypatch.setattr(jobs, 'hide', lambda cfg: done.append('hide'))
+    monkeypatch.setattr(jobs.config, 'load', lambda: dict(CFG, home_assistant={'url': 'http://ha', 'token': 't', 'entities': {
+        'show_button': 'input_button.frame_planner_show', 'hide_button': 'input_button.frame_planner_hide'}}))
+    ticks = []
+
+    def fake_sleep(s):
+        ticks.append(s)
+        if len(ticks) == 3:
+            raise KeyboardInterrupt
+    monkeypatch.setattr(jobs.time, 'sleep', fake_sleep)
+    try:
+        jobs.watch_home_assistant()
+    except KeyboardInterrupt:
+        pass
+    assert done == ['hide']

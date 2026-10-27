@@ -216,6 +216,7 @@ def restore(cfg):
         delete_plans(a, state)
         state['restore_due'] = False
         state['until'] = None
+        state['hide_pending'] = False
         state['showing'] = None  # "Back to artwork" also stops today's refreshes
         save_state(state)
 
@@ -253,6 +254,8 @@ def in_window(cfg, now):
 def _due(cfg, state, now):
     if not cfg.get('tv_ip'):
         return None  # not set up yet
+    if state.get('hide_pending'):
+        return 'restore'  # asked to hide while the TV slept: do it the moment it wakes
     every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
     refresh = 'refresh' if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every else None
     if in_window(cfg, now):
@@ -315,27 +318,51 @@ def show_for(cfg, minutes):
     show_plan(cfg, woke=woke, until=time.time() + minutes * 60)
 
 
+def hide(cfg):
+    """Back to the artwork now (a voice request). A sleeping TV is not woken: the artwork goes back
+    the moment it wakes, before anyone sees the plan."""
+    require_tv(cfg)
+    if tv.awake(cfg['tv_ip']):
+        restore(cfg)
+        return
+    with lock:
+        state = load_state()
+        state.update(hide_pending=True, showing=None, until=None)
+        save_state(state)
+    log('TV asleep: the artwork goes back as soon as it wakes')
+
+
 def watch_home_assistant():
-    """Poll the show button every few seconds; a press (its state is the time it was pressed)
-    shows the plan. The first reading after a start is only remembered, never acted on."""
-    last, failing = None, False
+    """Poll the show and hide buttons every few seconds; a press (a button's state is the time it was
+    pressed) shows the plan or brings the artwork back. The first reading after a start is only
+    remembered, never acted on."""
+    last, failing = {}, False
     while True:
         try:
             cfg = config.load()
-            entity = ((cfg.get('home_assistant') or {}).get('entities') or {}).get('show_button')
-            if entity and ha.configured(cfg) and cfg.get('tv_ip'):
-                pressed = ha.state(entity, cfg).get('state')
-                if last is not None and pressed != last and pressed not in ('unknown', 'unavailable', None):
-                    minutes = int(cfg['home_assistant'].get('show_minutes', 30))
-                    log(f'Plan requested from Home Assistant: showing it for {minutes} minutes')
-                    try:
-                        show_for(cfg, minutes)
-                    except Exception as e:  # noqa: BLE001
-                        log(f'Could not show the plan ({type(e).__name__}: {e})')
-                last, failing = pressed, False
+            ents = (cfg.get('home_assistant') or {}).get('entities') or {}
+            if ha.configured(cfg) and cfg.get('tv_ip'):
+                for key in ('show_button', 'hide_button'):
+                    entity = ents.get(key)
+                    if not entity:
+                        continue
+                    pressed = ha.state(entity, cfg).get('state')
+                    if key in last and pressed != last[key] and pressed not in ('unknown', 'unavailable', None):
+                        try:
+                            if key == 'show_button':
+                                minutes = int(cfg['home_assistant'].get('show_minutes', 30))
+                                log(f'Plan requested from Home Assistant: showing it for {minutes} minutes')
+                                show_for(cfg, minutes)
+                            else:
+                                log('Hide requested from Home Assistant: back to the artwork')
+                                hide(cfg)
+                        except Exception as e:  # noqa: BLE001
+                            log(f'Could not do that ({type(e).__name__}: {e})')
+                    last[key] = pressed
+                failing = False
         except Exception as e:  # noqa: BLE001  Home Assistant restarting: say so once
             if not failing:
-                log(f'Home Assistant not reachable for the show button ({e}); still trying')
+                log(f'Home Assistant not reachable for the show/hide buttons ({e}); still trying')
             failing = True
         time.sleep(3)
 
