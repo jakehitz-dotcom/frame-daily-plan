@@ -249,13 +249,13 @@ def save_settings():
         'days': [i for i in range(7) if f'day{i}' in f],
         'refresh_minutes': min(120, int(f['refresh_minutes'])) if f.get('refresh_minutes', '').strip().isdigit() else 5,
     }
-    cfg['weather'] = {
+    cfg['weather'] = dict(cfg['weather'], **{
         'enabled': 'weather_enabled' in f,
         'name': f.get('weather_name', '').strip(),
         'lat': float(f['lat']) if f.get('lat') else None,
         'lon': float(f['lon']) if f.get('lon') else None,
         'unit': 'C' if f.get('temp_unit') == 'C' else 'F',
-    }
+    })
     cfg['holidays'] = {'country': f.get('hol_country', '').strip().upper(), 'subdiv': f.get('hol_subdiv', '').strip().upper()}
     cfg['dim_past_events'] = 'dim_past_events' in f
     cfg['background'] = f.get('background', 'artwork')

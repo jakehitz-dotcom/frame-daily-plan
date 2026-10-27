@@ -185,15 +185,28 @@ def test_todo_items_reads_the_service_response(monkeypatch):
                                      {'summary': 'Call the plumber', 'due': '2026-10-27'}]}
 
 
-def test_weather_panel_shows_the_sky_right_now(monkeypatch):
+def test_weather_panel_uses_ktoa_now_and_the_nws_outlook(monkeypatch):
     import datetime
     import zoneinfo
+    import nws
     import plan_data
-    monkeypatch.setattr(ha, 'snapshot', lambda cfg: _snap(**{'weather.nws_33_7762171_118_3561558_khhr': {'state': 'sunny'}}))
-    monkeypatch.setattr(plan_data, 'weather', lambda cfg, day, w: {'icon': '☁️', 'max': 73, 'min': 58, 'text': 'Cloudy', 'hint': None})
+    monkeypatch.setattr(ha, 'snapshot', lambda cfg: _snap())
+    monkeypatch.setattr(plan_data, 'weather', lambda cfg, day, w: {'icon': '☁️', 'max': 73, 'min': 56, 'text': 'Cloudy',
+                                                                 'rain': 10, 'uv': {'max': 7}, 'hint': 'T-shirt'})
+    monkeypatch.setattr(nws, 'now', lambda stations: {'station': stations[0], 'text': 'Partly cloudy', 'icon': '⛅', 'temp_f': 66})
+    monkeypatch.setattr(nws, 'outlook', lambda lat, lon, today, tz: 'Rain Sat night–Sun (70%)')
     cfg = config.load()
     cfg['home_assistant'].update(url='http://ha', token='t')
     cfg['weather'].update(enabled=True, lat=33.77, lon=-118.36)
-    data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 12, tzinfo=zoneinfo.ZoneInfo('America/Los_Angeles')))
-    assert data['weather']['icon'] == '☀️' and data['weather']['text'] == 'Sunny now' and data['weather']['max'] == 73
-    assert 'sky' not in data['home']
+    la = zoneinfo.ZoneInfo('America/Los_Angeles')
+    wx = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 12, tzinfo=la))['weather']
+    assert (wx['icon'], wx['text'], wx['now'], wx['station']) == ('⛅', 'Partly cloudy now', 66, 'KTOA')
+    assert wx['outlook'] == 'Rain Sat night–Sun (70%)' and (wx['max'], wx['min']) == (73, 56)
+
+    def down(*a, **k):
+        raise OSError('api.weather.gov unreachable')
+    monkeypatch.setattr(nws, 'now', down)
+    monkeypatch.setattr(nws, 'outlook', down)
+    data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 12, tzinfo=la))
+    assert data['weather']['text'] == 'Cloudy' and 'outlook' not in data['weather']   # forecast still shown
+    assert any('NWS' in e for e in data['errors'])

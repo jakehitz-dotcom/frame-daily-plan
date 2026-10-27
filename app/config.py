@@ -15,7 +15,8 @@ DEFAULTS = {
     'plan_lang': 'en',
     # role "events" shows entries as appointments, "todos" puts every entry on the to-do list
     'calendars': [],
-    'weather': {'enabled': True, 'name': '', 'lat': None, 'lon': None, 'unit': 'F'},  # unit: 'F' or 'C'
+    # unit: 'F' or 'C'; stations: NWS stations for the sky right now, first fresh one wins (US only)
+    'weather': {'enabled': True, 'name': '', 'lat': None, 'lon': None, 'unit': 'F', 'stations': 'KTOA, KHHR'},
     'holidays': {'country': '', 'subdiv': ''},
     'schedule': {'enabled': True, 'start': '07:00', 'end': '10:00', 'days': [0, 1, 2, 3, 4, 5, 6],
                  'refresh_minutes': 5},  # 0 = show once per morning
@@ -28,7 +29,6 @@ DEFAULTS = {
         'dishwasher_clean': 'input_boolean.dishwasher_clean',  # on = cycle finished, door not opened since
         'wind_7d': 'input_number.rolling_hills_max_wind_7_day',
         'rain_7d': 'input_number.rolling_hills_rain_7_day',
-        'conditions': 'weather.nws_33_7762171_118_3561558_khhr',  # current sky (NWS observation) for the weather panel
         'last_bottle': 'sensor.finn_bottle',   # Huckleberry: time of the last bottle
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
     }, 'show_minutes': 30,

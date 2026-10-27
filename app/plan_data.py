@@ -11,6 +11,7 @@ import icalendar
 import recurring_ical_events
 
 import ha
+import nws
 
 TODO_PREFIXES = ('to-do:', 'todo:', 'task:', 'aufgabe:')
 
@@ -27,22 +28,15 @@ WEATHER_CODES = {
     95: ('⛈️', 'Gewitter', 'Thunderstorm'), 96: ('⛈️', 'Gewitter mit Hagel', 'Thunderstorm with hail'),
     99: ('⛈️', 'Gewitter mit Hagel', 'Thunderstorm with hail'),
 }
-# Home Assistant weather conditions → emoji, German text, English text (the sky right now)
-HA_CONDITIONS = {
-    'sunny': ('☀️', 'Sonnig', 'Sunny'), 'clear-night': ('🌙', 'Klar', 'Clear'),
-    'partlycloudy': ('⛅', 'Teilweise bewölkt', 'Partly cloudy'), 'cloudy': ('☁️', 'Bewölkt', 'Cloudy'),
-    'fog': ('🌫️', 'Neblig', 'Foggy'), 'rainy': ('🌧️', 'Regen', 'Rain'), 'pouring': ('🌧️', 'Starker Regen', 'Heavy rain'),
-    'lightning': ('⛈️', 'Gewitter', 'Thunderstorm'), 'lightning-rainy': ('⛈️', 'Gewitter', 'Thunderstorm'),
-    'snowy': ('🌨️', 'Schnee', 'Snow'), 'snowy-rainy': ('🌨️', 'Schneeregen', 'Sleet'), 'hail': ('🌨️', 'Hagel', 'Hail'),
-    'windy': ('💨', 'Windig', 'Windy'), 'windy-variant': ('💨', 'Windig', 'Windy'),
-}
 WORDS = {
     'de': {'all_day': 'Ganztägig', 'holiday': 'Feiertag', 'changeable': 'Wechselhaft', 'rain': 'Regen',
            'hint_rain': 'Regenjacke mitnehmen', 'hint_cold': 'Warme Jacke anziehen',
-           'hint_cool': 'Pulli oder Jacke mitnehmen', 'hint_hot': 'Viel trinken und Sonnencreme', 'now': 'Jetzt: {}'},
+           'hint_cool': 'Pulli oder Jacke mitnehmen', 'hint_hot': 'Viel trinken und Sonnencreme', 'now': 'Jetzt: {}',
+           'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet'},
     'en': {'all_day': 'All day', 'holiday': 'Holiday', 'changeable': 'Changeable', 'rain': 'rain',
            'hint_rain': 'Bring a rain jacket', 'hint_cold': 'Wear a warm coat',
-           'hint_cool': 'Bring a sweater or jacket', 'hint_hot': 'Drink plenty, wear sunscreen', 'now': '{} now'},
+           'hint_cool': 'Bring a sweater or jacket', 'hint_hot': 'Drink plenty, wear sunscreen', 'now': '{} now',
+           'quiet': 'Quiet week ahead: no storms or rain expected'},
 }
 
 
@@ -105,32 +99,76 @@ def holiday_entries(cfg, day, w):
             for n in cal.get(day).split(';')]
 
 
+def dress(hi_f, lo_f, rain_pct, uv_max, lang='en'):
+    """What to wear, from the day's high/low (°F), rain chance and UV: one short line."""
+    if lang == 'de':
+        base = ('Kurze Hose und T-Shirt' if hi_f >= 80 else 'T-Shirt-Wetter' if hi_f >= 72 else 'Langarm oder leichte Schicht'
+                if hi_f >= 64 else 'Pulli oder leichte Jacke' if hi_f >= 55 else 'Warme Jacke' if hi_f >= 45 else 'Wintermantel')
+        extra = (['Jacke für morgens und abends'] if hi_f >= 64 and lo_f < 55 and rain_pct < 50 else []) + \
+            (['Regenjacke'] if rain_pct >= 50 else []) + (['Sonnencreme'] if uv_max >= 6 else [])
+        return ' · '.join([base] + extra)
+    if hi_f >= 90:
+        base = 'Shorts & T-shirt, hydrate'
+    elif hi_f >= 80:
+        base = 'Shorts & T-shirt'
+    elif hi_f >= 72:
+        base = 'T-shirt' + (' + light jacket AM/PM' if lo_f < 58 else ' weather')
+    elif hi_f >= 64:
+        base = 'Long sleeves' + (' + jacket AM/PM' if lo_f < 55 else ' or a light layer')
+    elif hi_f >= 55:
+        base = 'Sweater or light jacket'
+    elif hi_f >= 45:
+        base = 'Warm jacket'
+    else:
+        base = 'Winter coat, hat & gloves'
+    extra = (['rain jacket or umbrella'] if rain_pct >= 50 else []) + (['sunscreen'] if uv_max >= 6 else [])
+    return ' · '.join([base] + extra)
+
+
+def _hour(h):
+    return datetime.time(h % 24).strftime('%-I %p')
+
+
 def weather(cfg, day, w):
+    """Today's forecast (Open-Meteo): high/low, rain chance, max UV and the hours at UV 6+.
+    Temperatures are returned in the display unit; advice is computed in °F."""
     loc = cfg['weather']
     url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode({
         'latitude': loc['lat'], 'longitude': loc['lon'], 'timezone': cfg['timezone'],
-        'daily': 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
-        'start_date': day.isoformat(), 'end_date': day.isoformat()})
-    d = json.load(urllib.request.urlopen(url, timeout=20))['daily']
+        'daily': 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max',
+        'hourly': 'uv_index', 'start_date': day.isoformat(), 'end_date': day.isoformat()})
+    body = json.load(urllib.request.urlopen(url, timeout=20))
+    d = body['daily']
     code, tmax, tmin = d['weather_code'][0], d['temperature_2m_max'][0], d['temperature_2m_min'][0]
     rain = d['precipitation_probability_max'][0] or 0
+    uv_hours = [int(t[11:13]) for t, v in zip(body['hourly']['time'], body['hourly']['uv_index']) if (v or 0) >= 6]
+    uv_max = max((d.get('uv_index_max') or [0])[0] or 0, max(body['hourly']['uv_index'] or [0], key=lambda v: v or 0) or 0)
     entry = WEATHER_CODES.get(code)
     icon, text = (entry[0], entry[1 if cfg.get('plan_lang') == 'de' else 2]) if entry else ('⛅', w['changeable'])
-    if rain >= 50:
-        hint = w['hint_rain']
-    elif tmax < 12:
-        hint = w['hint_cold']
-    elif tmax < 18 or tmin < 12:
-        hint = w['hint_cool']
-    elif tmax >= 28:
-        hint = w['hint_hot']
-    else:
-        hint = None
     if 30 <= rain < 50:
         text += f", {rain} % {w['rain']}"
+    hi_f, lo_f = tmax * 9 / 5 + 32, tmin * 9 / 5 + 32
     if loc.get('unit', 'F') == 'F':
-        tmax, tmin = tmax * 9 / 5 + 32, tmin * 9 / 5 + 32  # the hints above use Celsius thresholds
-    return {'icon': icon, 'max': round(tmax), 'min': round(tmin), 'text': text, 'hint': hint}
+        tmax, tmin = hi_f, lo_f
+    return {'icon': icon, 'max': round(tmax), 'min': round(tmin), 'text': text, 'rain': rain,
+            'uv': {'max': round(uv_max), 'from': _hour(uv_hours[0]) if uv_hours else None,
+                   'to': _hour(uv_hours[-1] + 1) if uv_hours else None},
+            'hint': dress(hi_f, lo_f, rain, uv_max, cfg.get('plan_lang', 'en'))}
+
+
+def sky_now(cfg, data, w):
+    """The sky right now from the nearest fresh NWS observation (KTOA, then KHHR), and the current
+    temperature. Falls back to the forecast text when no station has a recent report."""
+    stations = [s.strip().upper() for s in (cfg['weather'].get('stations') or 'KTOA, KHHR').split(',') if s.strip()]
+    obs = nws.now(stations)
+    if not obs:
+        return
+    data['weather'].update(icon=obs['icon'], station=obs['station'],
+                           text=w['now'].format(obs['text']) + (f", {data['weather']['rain']} % {w['rain']}"
+                                                                 if 30 <= data['weather']['rain'] < 50 else ''))
+    if obs['temp_f'] is not None:
+        t = obs['temp_f'] if cfg['weather'].get('unit', 'F') == 'F' else round((obs['temp_f'] - 32) * 5 / 9)
+        data['weather']['now'] = t
 
 
 WIND_ALERT_MPH = 20   # the same thresholds as the alert tiles on the Eastvale dashboard
@@ -179,10 +217,6 @@ def home(cfg, now=None):
         if 0 <= mins < 24 * 60:  # older than a day means stale data, not a hungry baby
             out['bottle'] = {'at': at.strftime('%-I:%M %p'), 'ago': f'{int(mins // 60)}h {int(mins % 60)}m'
                              if mins >= 60 else f'{int(mins)}m'}
-    sky = get('conditions')
-    if sky and sky.get('state') in HA_CONDITIONS:
-        icon, de, en = HA_CONDITIONS[sky['state']]
-        out['sky'] = {'icon': icon, 'text': de if cfg.get('plan_lang') == 'de' else en}
     dish = get('dishwasher_clean')
     if dish and dish.get('state') == 'on':
         out['dishwasher_clean'] = True
@@ -233,6 +267,15 @@ def build(cfg, now):
             data['weather'] = weather(cfg, today, w)
         except Exception as e:  # noqa: BLE001  the plan must still appear without weather
             errors.append(f'Weather: {e}')
+        if data['weather']:
+            try:
+                sky_now(cfg, data, w)
+            except Exception as e:  # noqa: BLE001  the forecast text stays
+                errors.append(f'NWS observation: {e}')
+            try:
+                data['weather']['outlook'] = nws.outlook(loc['lat'], loc['lon'], today, tz) or w['quiet']
+            except Exception as e:  # noqa: BLE001
+                errors.append(f'NWS outlook: {e}')
     data['todo_hint'] = cfg.get('todo_hint', '')
     lists = (cfg.get('home_assistant') or {}).get('todo_lists') or []
     if lists and ha.configured(cfg):
@@ -246,10 +289,6 @@ def build(cfg, now):
     if ha.configured(cfg):
         try:
             data['home'], data['week'] = home(cfg, now)
-            sky = data['home'].pop('sky', None)
-            if sky and data['weather']:  # the sky right now beats the day's worst-case code
-                rain = data['weather']['text'].partition(', ')[2]  # keep "30 % rain" from the forecast
-                data['weather'].update(icon=sky['icon'], text=w['now'].format(sky['text']) + (f', {rain}' if rain else ''))
         except Exception as e:  # noqa: BLE001  Home Assistant down: the plan appears without it
             errors.append(f'Home Assistant: {e}')
     for e in data['today'] + data['tomorrow']:
@@ -295,7 +334,10 @@ DEMO = {
                      ('16:00', '17:00', 'Piano lesson', 'green'),
                      ('19:00', None, 'Board game night', 'green')],
         'todos': ['Learn English vocabulary', 'Practise maths', 'Tidy up your room'],
-        'weather': {'icon': '⛅', 'max': 19, 'min': 12, 'text': 'Partly cloudy', 'hint': 'Bring a jumper or jacket'},
+        'weather': {'icon': '⛅', 'now': 66, 'max': 73, 'min': 56, 'text': 'Partly cloudy now', 'rain': 10,
+                    'uv': {'max': 7, 'from': '11 AM', 'to': '3 PM'},
+                    'hint': 'Long sleeves + jacket AM/PM · sunscreen',
+                    'outlook': 'Rain likely Sat night–Sun (70%) · Windy Tue'},
     },
 }
 

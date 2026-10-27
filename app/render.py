@@ -34,7 +34,9 @@ LABELS = {
            'date': '{day}. {month}', 'week': 'Nächste 7 Tage', 'wind': '{} km/h Böen', 'rain': '{} mm Regen',
            'inside': 'Drinnen', 'heat': 'Heizen auf', 'cool': 'Kühlen auf', 'heat_cool': 'Automatik',
            'hot_tub': 'Whirlpool', 'dishwasher': 'Spülmaschine', 'clean': 'Sauber',
-           'bottle': 'Letzte Flasche {}', 'ago': 'vor {}'},
+           'bottle': 'Letzte Flasche {}', 'ago': 'vor {}', 'hilo': 'Hoch {}°  ·  Tief {}°',
+           'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': '6+ {}–{}',
+           'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
                       'October', 'November', 'December'],
@@ -44,7 +46,9 @@ LABELS = {
            'date': '{month} {day}', 'week': 'Next 7 days', 'wind': '{} mph peak', 'rain': '{} in rain',
            'inside': 'Inside', 'heat': 'Heating to', 'cool': 'Cooling to', 'heat_cool': 'Auto',
            'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean',
-           'bottle': 'Last bottle {}', 'ago': '{} ago'},
+           'bottle': 'Last bottle {}', 'ago': '{} ago', 'hilo': 'High {}°  ·  Low {}°',
+           'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': '6+ {}–{}',
+           'quiet': 'Quiet week ahead: no storms or rain expected'},
 }
 L = LABELS['de']  # set per render
 
@@ -69,6 +73,92 @@ def emoji(im, ch, x, y, size):
     scale = size / max(tile.size)
     tile = tile.resize((max(1, round(tile.width * scale)), max(1, round(tile.height * scale))), Image.LANCZOS)
     im.alpha_composite(tile, (round(x + (size - tile.width) / 2), round(y + (size - tile.height) / 2)))
+
+
+UV_LEVELS = ((11, (190, 130, 230)), (8, HEAT), (6, ORANGE), (3, (235, 200, 90)), (0, CLEAN))
+
+
+def fit_one_or_two(d, text, weight, width, size, one_line_smallest, two_line_smallest):
+    """Prefer one line, shrinking a little; wrap to two lines only when it truly will not fit."""
+    s, lines = fit_lines(d, text, weight, width, size, one_line_smallest, 1)
+    if d.textlength(lines[0], font=font(s, weight)) <= width and len(wrap(d, text, font(s, weight), width, 10)) == 1:
+        return s, lines
+    return fit_lines(d, text, weight, width, size, two_line_smallest, 2)
+
+
+def fit_lines(d, text, weight, width, size, smallest, max_lines=2):
+    """The largest size (down to smallest) at which text fits in max_lines lines of width."""
+    while True:
+        f = font(size, weight)
+        lines = wrap(d, text, f, width, max_lines=10)
+        if (len(lines) <= max_lines and all(d.textlength(t, font=f) <= width for t in lines)) or size <= smallest:
+            return size, lines[:max_lines]
+        size -= 2
+
+
+def weather_panel(im, d, wx, week, x, x1, top):
+    """Now, high/low, condition, UV, what to wear, then the 7-day outlook. With im=None it only
+    measures, so the panel can be sized to its content. Returns the panel's bottom edge."""
+    w = x1 - x
+    draw = im is not None
+    if draw:
+        emoji(im, wx['icon'], x, top + 60, 200)
+        d.text((x + 250, top + 40), f"{wx.get('now', wx['max'])}°", font=font(150, 'DemiBold'), fill=CREAM)
+        d.text((x + 254, top + 222), L['hilo'].format(wx['max'], wx['min']), font=font(56, 'Medium'), fill=SOFT)
+    y = top + 305
+    size, lines = fit_lines(d, wx['text'], 'Medium', w, 64, 48, 1)
+    if draw:
+        d.text((x, y), lines[0], font=font(size, 'Medium'), fill=CREAM)
+    y += 88
+    uv = wx.get('uv') or {}
+    if uv.get('max') is not None:
+        colour = next(c for floor, c in UV_LEVELS if uv['max'] >= floor)
+        head = f"UV {uv['max']}"
+        tail = f"  {L['uv_names'][next(i for i, (floor, _) in enumerate(UV_LEVELS) if uv['max'] >= floor)]}" + \
+            (f" · {L['uv_window'].format(uv['from'], uv['to'])}" if uv.get('from') else '')
+        if draw:
+            hf, tf = font(58, 'DemiBold'), font(54, 'Medium')
+            d.text((x, y), head, font=hf, fill=colour)
+            d.text((x + d.textlength(head, font=hf), y + 3), tail, font=tf, fill=SOFT)
+        y += 84
+    if wx.get('hint'):
+        size, lines = fit_one_or_two(d, wx['hint'], 'DemiBold', w, 58, 48, 54)
+        for line in lines:
+            if draw:
+                d.text((x, y), line, font=font(size, 'DemiBold'), fill=ORANGE)
+            y += round(size * 1.22)
+    outlook = wx.get('outlook')
+    if week or outlook:  # "Next 7 days ———" heads the outlook
+        y += 22
+        if draw:
+            lf = font(48, 'Medium')
+            d.text((x, y), L['week'], font=lf, fill=DIM)
+            lx = x + d.textlength(L['week'], font=lf) + 30
+            d.line([(lx, y + 32), (x1, y + 32)], fill=(64, 68, 78), width=3)
+        y += 76
+        if week:
+            parts = [(icon, L[key].format(f"{week[key]:g}"), colour if week.get(key + '_alert') else CREAM)
+                     for key, icon, colour in (('wind', '💨', HEAT), ('rain', '🌧️', COOL)) if key in week]
+            size = 60
+            while size > 44 and sum(80 + d.textlength(t, font=font(size, 'DemiBold')) for _, t, _ in parts) \
+                    + 70 * (len(parts) - 1) > w:
+                size -= 2
+            if draw:
+                cx = x
+                for icon, text, colour in parts:
+                    f = font(size, 'DemiBold')
+                    emoji(im, icon, cx, y, 62)
+                    d.text((cx + 80, y + (60 - size) // 2), text, font=f, fill=colour)
+                    cx += 80 + d.textlength(text, font=f) + 70
+            y += 86
+        if outlook:
+            quiet = outlook == L['quiet']
+            size, lines = fit_one_or_two(d, outlook, 'Medium', w, 56, 46, 52)
+            for line in lines:
+                if draw:
+                    d.text((x, y), line, font=font(size, 'Medium'), fill=DIM if quiet else CREAM)
+                y += round(size * 1.22)
+    return y + 40
 
 
 def home_items(home):
@@ -223,7 +313,9 @@ def render(day, out, background_path=None):
     if bar:
         bottom = bar[1] - 50
     week = day.get('week') or {}
-    wx_bottom = 960 if week and day.get('weather') else 820
+    wx = day.get('weather')
+    scratch = ImageDraw.Draw(Image.new('RGB', (8, 8)))
+    wx_bottom = weather_panel(None, scratch, wx, week, c3[0] + 70, c3[1] - 70, M) if wx else 820
     panel(layer, (c1[0], top, c1[1], cal_bottom))
     panel(layer, (c1[0], todo_top, c1[1], bottom), day.get('todo_title', L['todos']))
     panel(layer, (c2[0], M, c2[1], bottom), day.get('today_title', L['today']))
@@ -272,37 +364,10 @@ def render(day, out, background_path=None):
 
     events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40)
 
-    # Weather: icon, temperatures, one concrete hint.
-    wx = day.get('weather')
     if wx:
-        ef = ImageFont.truetype(EMOJI, 109)
-        icon = Image.new('RGBA', (140, 140), (0, 0, 0, 0))
-        ImageDraw.Draw(icon).text((0, 0), wx['icon'], font=ef, embedded_color=True)
-        icon = icon.resize((230, 230), Image.LANCZOS)
-        im.alpha_composite(icon, (c3[0] + 70, M + 70))
-        d.text((c3[0] + 340, M + 70), f"{wx['max']}°", font=font(150, 'DemiBold'), fill=CREAM)
-        d.text((c3[0] + 340, M + 250), L['night'].format(wx['min']), font=font(58, 'Medium'), fill=SOFT)
-        d.text((c3[0] + 70, M + 380), wx['text'], font=font(66, 'Medium'), fill=CREAM)
-        if wx.get('hint'):
-            d.text((c3[0] + 70, M + 480), wx['hint'], font=font(66, 'DemiBold'), fill=ORANGE)
-        if week:  # the 7-day outlook from Home Assistant, highlighted past the dashboard's alert levels
-            y = M + 590
-            d.line([(c3[0] + 70, y), (c3[1] - 70, y)], fill=(64, 68, 78), width=3)
-            d.text((c3[0] + 70, y + 26), L['week'], font=font(50, 'Medium'), fill=DIM)
-            parts = [(icon, L[key].format(f"{week[key]:g}"), colour if week.get(key + '_alert') else CREAM)
-                     for key, icon, colour in (('wind', '💨', HEAT), ('rain', '🌧️', COOL)) if key in week]
-            size = 60
-            while size > 44 and sum(80 + d.textlength(t, font=font(size, 'DemiBold')) for _, t, _ in parts) \
-                    + 70 * (len(parts) - 1) > c3[1] - c3[0] - 140:
-                size -= 2
-            x = c3[0] + 70
-            for icon, text, colour in parts:
-                f = font(size, 'DemiBold')
-                emoji(im, icon, x, y + 96, 62)
-                d.text((x + 80, y + 96 + (60 - size) // 2), text, font=f, fill=colour)
-                x += 80 + d.textlength(text, font=f) + 70
+        weather_panel(im, d, wx, week, c3[0] + 70, c3[1] - 70, M)
 
-    events(d, day.get('tomorrow', []), c3[0] + 70, wx_bottom + 250, c3[1] - c3[0] - 140, bottom - 40, scale=0.82)
+    events(d, day.get('tomorrow', []), c3[0] + 70, wx_bottom + 215, c3[1] - c3[0] - 140, bottom - 40, scale=0.82)
     if bar:
         home_bar(im, bar, items)
 
