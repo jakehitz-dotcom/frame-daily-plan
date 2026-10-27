@@ -274,3 +274,20 @@ def test_hide_button_press_is_acted_on(monkeypatch):
     except KeyboardInterrupt:
         pass
     assert done == ['hide']
+
+
+def test_one_wake_attempt_per_window_even_if_it_fails_or_the_app_restarts(monkeypatch):
+    d = lambda h, m=0: datetime.datetime(2026, 10, 27, h, m, tzinfo=TZ)
+    jobs.save_state({'plan_ids': [], 'tv_mac': 'aa:bb:cc:dd:ee:ff'})
+    awake = [False]
+    calls = _sleepy_tv(monkeypatch, awake, wakes=False)
+    cfg = dict(CFG, wake_tv=True)
+    for minute in range(0, 180, 1):                      # every tick of the whole 7-10 AM window
+        jobs.tick(cfg, d(7 + minute // 60, minute % 60), {})   # fresh memo each time = app restarts
+    assert calls['wake'] == 1 and calls['show'] == []
+    awake[0] = True                                      # motion wakes it at 8:40
+    assert jobs.tick(cfg, d(8, 40), {}) == 'show' and calls['show'] == [(False, False)]
+    awake[0] = False                                     # back asleep; tomorrow is a new window
+    jobs.save_state(dict(jobs.load_state(), shown_on='2026-10-27'))
+    jobs.tick(cfg, datetime.datetime(2026, 10, 28, 7, 0, tzinfo=TZ), {})
+    assert calls['wake'] == 2

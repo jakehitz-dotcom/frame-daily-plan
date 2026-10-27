@@ -23,7 +23,6 @@ LAST_IMAGE = os.path.join(config.DATA, 'last.jpg')
 ART_CACHE = os.path.join(config.DATA, 'art')
 RETRY_AFTER = 2 * 60  # after an error talking to an awake TV
 TICK = 15             # how often the scheduler looks; also how fast a TV waking up is noticed
-WAKE_EVERY = 10 * 60  # at most one wake-up attempt per 10 minutes
 
 lock = threading.Lock()  # one TV conversation at a time (scheduler and buttons)
 recent = collections.deque(maxlen=200)
@@ -322,12 +321,18 @@ def tick(cfg, now, memo):
     woke = False
     if not tv.awake(cfg['tv_ip']):
         mac = state.get('tv_mac') or cfg.get('tv_mac')
-        if action == 'show' and cfg.get('wake_tv', True) and mac and time.time() - memo.get('woke_at', 0) >= WAKE_EVERY:
-            memo['woke_at'] = time.time()
-            log('Waking the TV for the plan')
+        window = f'{now.date().isoformat()}:{view_for(cfg, now)}'
+        # The TV is woken once per window, at its start, and never again in it: refreshes, the end of
+        # the window and a failed wake-up all wait for motion to wake the TV. Recorded in the state file,
+        # so restarting the app cannot cause a second wake-up.
+        if action == 'show' and cfg.get('wake_tv', True) and mac and state.get('woke_for') != window:
+            state['woke_for'] = window
+            save_state(state)
+            log('Waking the TV for the plan (once for this window)')
             woke = tv.wake(cfg['tv_ip'], mac)
             if not woke:
-                log('The TV did not wake up (is "Power On with Mobile" on?). The plan goes up as soon as it wakes.')
+                log('The TV did not wake up (is "Power On with Mobile" on?). No more wake-ups in this window: '
+                    'the plan goes up when motion wakes the TV.')
         if not woke:
             if not memo.get('asleep_logged'):
                 memo['asleep_logged'] = True
