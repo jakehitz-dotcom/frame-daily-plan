@@ -52,11 +52,29 @@ def now(stations, at=None):
     return None
 
 
+_periods_cache = {}  # (lat, lon) -> (fetched at, periods): one fetch serves today's high, the outlook and the week
+
+
 def periods(lat, lon):
+    import time
     key = (round(lat, 4), round(lon, 4))
+    hit = _periods_cache.get(key)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
     if key not in _forecast_urls:
         _forecast_urls[key] = _get(f'https://api.weather.gov/points/{key[0]},{key[1]}')['properties']['forecast']
-    return _get(_forecast_urls[key])['properties']['periods']
+    result = _get(_forecast_urls[key])['properties']['periods']
+    _periods_cache[key] = (time.time(), result)
+    return result
+
+
+def today_high(lat, lon, today, tz):
+    """Today's forecast high (°F) from the daytime period that starts today; None after it has passed."""
+    for p in periods(lat, lon):
+        if p.get('isDaytime') and datetime.datetime.fromisoformat(p['startTime']).astimezone(tz).date() == today \
+                and p.get('temperatureUnit') == 'F' and p.get('temperature') is not None:
+            return p['temperature']
+    return None
 
 
 def alerts(lat, lon):

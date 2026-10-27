@@ -91,3 +91,26 @@ def test_forecast_high_low_uv_window(monkeypatch):
     assert (wx['max'], wx['min']) == (73, 56)
     assert wx['uv'] == {'max': 7, 'from': '11 AM', 'to': '3 PM'}
     assert wx['hint'] == 'T-shirt + light jacket AM/PM · sunscreen'
+
+
+def test_high_never_below_now_and_nws_high_preferred(monkeypatch):
+    cfg = {'weather': {'lat': 33.77, 'lon': -118.36, 'unit': 'F'}, 'timezone': 'America/Los_Angeles', 'plan_lang': 'en'}
+    today = datetime.date(2026, 10, 27)
+    data = {'weather': {'max': 67, 'min': 56, 'now': 75, 'rain': 0, 'uv': {'max': 7}, 'hint': ''}, 'errors': []}
+    monkeypatch.setattr(nws, 'today_high', lambda lat, lon, d, tz: 72)          # NWS: 72, but it's 75 out
+    plan_data.reconcile_temps(cfg, data, today, LA)
+    assert (data['weather']['max'], data['weather']['min']) == (75, 56)
+    assert data['weather']['hint'] == 'Shorts & T-shirt · sunscreen' or data['weather']['hint'].startswith('T-shirt')
+    data = {'weather': {'max': 67, 'min': 56, 'now': 66, 'rain': 0, 'uv': {'max': 3}, 'hint': ''}, 'errors': []}
+    plan_data.reconcile_temps(cfg, data, today, LA)
+    assert data['weather']['max'] == 72                                              # NWS beats Open-Meteo's 67
+    monkeypatch.setattr(nws, 'today_high', lambda lat, lon, d, tz: None)        # evening: NWS has no "today"
+    data = {'weather': {'max': 67, 'min': 56, 'now': 52, 'rain': 0, 'uv': {'max': 0}, 'hint': ''}, 'errors': []}
+    plan_data.reconcile_temps(cfg, data, today, LA)
+    assert (data['weather']['max'], data['weather']['min']) == (67, 52)              # low follows a colder night
+
+
+def test_today_high_from_periods(monkeypatch):
+    monkeypatch.setattr(nws, 'periods', lambda lat, lon: WEEK)
+    assert nws.today_high(33.77, -118.36, datetime.date(2026, 10, 27), LA) == 73
+    assert nws.today_high(33.77, -118.36, datetime.date(2026, 10, 28), LA) == 72

@@ -173,6 +173,27 @@ def sky_now(cfg, data, w):
         data['weather']['now'] = t
 
 
+def reconcile_temps(cfg, data, today, tz):
+    """High from the NWS forecast (forecaster-adjusted; Open-Meteo's raw model often runs cool near the
+    coast), then made consistent with the thermometer: the high is never below the temperature right now,
+    nor the low above it. The dressing advice follows the corrected numbers."""
+    wx, loc = data['weather'], cfg['weather']
+    unit = loc.get('unit', 'F')
+    to_unit = (lambda f: f) if unit == 'F' else (lambda f: round((f - 32) * 5 / 9))
+    to_f = (lambda t: t) if unit == 'F' else (lambda t: t * 9 / 5 + 32)
+    try:
+        hi = nws.today_high(loc['lat'], loc['lon'], today, tz)
+        if hi is not None:
+            wx['max'] = to_unit(hi)
+    except Exception as e:  # noqa: BLE001  keep the Open-Meteo high
+        data['errors'].append(f'NWS high: {e}')
+    if wx.get('now') is not None:
+        wx['max'] = max(wx['max'], wx['now'])
+        wx['min'] = min(wx['min'], wx['now'])
+    wx['hint'] = dress(to_f(wx['max']), to_f(wx['min']), wx.get('rain', 0), (wx.get('uv') or {}).get('max') or 0,
+                       cfg.get('plan_lang', 'en'))
+
+
 WIND_ALERT_MPH = 20   # the same thresholds as the alert tiles on the Eastvale dashboard
 RAIN_ALERT_IN = 0.25
 
@@ -274,6 +295,7 @@ def build(cfg, now):
                 sky_now(cfg, data, w)
             except Exception as e:  # noqa: BLE001  the forecast text stays
                 errors.append(f'NWS observation: {e}')
+            reconcile_temps(cfg, data, today, tz)
             try:
                 data['weather']['outlook'] = nws.outlook(loc['lat'], loc['lon'], today, tz) or w['quiet']
             except Exception as e:  # noqa: BLE001
