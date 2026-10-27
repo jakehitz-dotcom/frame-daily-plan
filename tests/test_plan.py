@@ -117,3 +117,61 @@ def test_refresh_uploads_only_when_the_picture_changed(monkeypatch):
     picture['bytes'] = b'plan v2'                                # e.g. a new calendar entry
     state = jobs.put_temporary(cfg, make, 'Plan updated', kind='plan', only_if_changed=True)
     assert sent == ['MY_F0', 'MY_F1'] and state['plan_ids'] == ['MY_F1'] and state['restore_id'] == 'MY_ART'
+
+
+def _sleepy_tv(monkeypatch, awake_now, wakes):
+    """A Frame that sleeps between motion: awake_now[0] flips when it wakes."""
+    calls = {'wake': 0, 'show': [], 'restore': 0}
+    monkeypatch.setattr(jobs.tv, 'awake', lambda ip: awake_now[0])
+
+    def wake(ip, mac, wait=60):
+        calls['wake'] += 1
+        awake_now[0] = wakes
+        return wakes
+    monkeypatch.setattr(jobs.tv, 'wake', wake)
+    monkeypatch.setattr(jobs, 'show_plan', lambda cfg, refresh=False, woke=False: calls['show'].append((refresh, woke)))
+    monkeypatch.setattr(jobs, 'restore', lambda cfg: calls.__setitem__('restore', calls['restore'] + 1))
+    return calls
+
+
+def test_plan_window_starts_with_the_tv_asleep_wakes_it(monkeypatch):
+    d = lambda h, m=0: datetime.datetime(2026, 10, 27, h, m, tzinfo=TZ)
+    jobs.save_state({'plan_ids': [], 'tv_mac': 'aa:bb:cc:dd:ee:ff'})
+    calls = _sleepy_tv(monkeypatch, [False], wakes=True)
+    assert jobs.tick(dict(CFG, wake_tv=True), d(7), {}) == 'show'
+    assert calls['wake'] == 1 and calls['show'] == [(False, True)]   # staged on a woken TV
+
+
+def test_tv_that_will_not_wake_gets_the_plan_when_motion_wakes_it(monkeypatch):
+    d = lambda h, m=0: datetime.datetime(2026, 10, 27, h, m, tzinfo=TZ)
+    jobs.save_state({'plan_ids': [], 'tv_mac': 'aa:bb:cc:dd:ee:ff'})
+    awake = [False]
+    calls = _sleepy_tv(monkeypatch, awake, wakes=False)
+    memo = {}
+    assert jobs.tick(dict(CFG, wake_tv=True), d(7), memo) is None
+    assert jobs.tick(dict(CFG, wake_tv=True), d(7, 1), memo) is None
+    assert calls['wake'] == 1                                         # not hammered every tick
+    awake[0] = True                                                   # someone walks in
+    assert jobs.tick(dict(CFG, wake_tv=True), d(7, 40), memo) == 'show' and calls['show'] == [(False, False)]
+
+
+def test_refresh_waits_for_motion_and_never_wakes_the_tv(monkeypatch):
+    d = lambda h, m=0: datetime.datetime(2026, 10, 27, h, m, tzinfo=TZ)
+    cfg = dict(CFG, wake_tv=True, schedule=dict(CFG['schedule'], refresh_minutes=5))
+    jobs.save_state({'plan_ids': ['MY_F1'], 'tv_mac': 'aa:bb:cc:dd:ee:ff', 'shown_on': '2026-10-27',
+                     'showing': 'plan', 'shown_at': d(7).timestamp(), 'restore_due': True})
+    awake = [False]
+    calls = _sleepy_tv(monkeypatch, awake, wakes=True)
+    assert jobs.tick(cfg, d(7, 30), {}) is None and calls['wake'] == 0
+    awake[0] = True
+    assert jobs.tick(cfg, d(7, 31), {}) == 'refresh' and calls['show'] == [(True, False)]
+
+
+def test_window_end_restores_on_the_next_natural_wake(monkeypatch):
+    d = lambda h, m=0: datetime.datetime(2026, 10, 27, h, m, tzinfo=TZ)
+    jobs.save_state({'plan_ids': ['MY_F1'], 'tv_mac': 'aa:bb:cc:dd:ee:ff', 'shown_on': '2026-10-27', 'restore_due': True})
+    awake = [False]
+    calls = _sleepy_tv(monkeypatch, awake, wakes=True)
+    assert jobs.tick(dict(CFG, wake_tv=True), d(10), {}) is None and calls['wake'] == 0
+    awake[0] = True
+    assert jobs.tick(dict(CFG, wake_tv=True), d(12), {}) == 'restore'

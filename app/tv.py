@@ -129,6 +129,48 @@ def get_thumbnail(a, content_id):
     return result['data']
 
 
+def device_info(ip, timeout=2):
+    """The TV's REST info (port 8001), answered even before pairing. None when it doesn't answer."""
+    try:
+        return requests.get(f'http://{ip}:8001/api/v2/', timeout=timeout).json().get('device', {})
+    except Exception:  # noqa: BLE001  asleep, off, or not there
+        return None
+
+
+def awake(ip):
+    """True when the TV is on the network and not in standby (screen on, in Art Mode or TV mode)."""
+    info = device_info(ip)
+    return info is not None and info.get('PowerState', 'on') != 'standby'
+
+
+def mac_address(ip):
+    info = device_info(ip) or {}
+    mac = (info.get('wifiMac') or '').strip().lower()
+    return mac if len(mac.replace(':', '').replace('-', '')) == 12 else None
+
+
+def wake(ip, mac, wait=60):
+    """Wake-on-LAN (needs "Power On with Mobile" on the TV). Returns True once the TV answers."""
+    import time
+    payload = b'\xff' * 6 + bytes.fromhex(mac.replace(':', '').replace('-', '')) * 16
+    targets = {'255.255.255.255', str(ipaddress.ip_network(ip + '/24', strict=False).broadcast_address), ip}
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            for target in targets:
+                for port in (9, 7):
+                    try:
+                        s.sendto(payload, (target, port))
+                    except OSError:
+                        pass
+        for _ in range(5):
+            time.sleep(1)
+            if awake(ip):
+                return True
+    return False
+
+
 def status(ip):
     a = connect(ip)
     return {'art_mode': a.get_artmode(), 'current': (a.get_current() or {}).get('content_id')}

@@ -136,6 +136,11 @@
         <label class="inline"><input type="checkbox" name="schedule_enabled" {% if cfg.schedule.enabled %}checked{% endif %}> {{ t.active }}</label>
         {{ t.from }} <input type="time" name="start" value="{{ cfg.schedule.start }}"> {{ t.to }} <input type="time" name="end" value="{{ cfg.schedule.end }}"> {{ t.oclock }}
       </div>
+      <label for="tv_mac">{{ t.wake }}</label>
+      <div class="row"><label class="inline"><input type="checkbox" name="wake_tv" {% if cfg.wake_tv %}checked{% endif %}> {{ t.wake_label }}</label>
+        <input type="text" id="tv_mac" name="tv_mac" value="{{ cfg.tv_mac or state.tv_mac or '' }}" placeholder="{{ t.mac_ph }}" style="width:220px">
+        <button formaction="{{ url_for('wake_now') }}">{{ t.btn_wake }}</button>
+        <span class="hint">{{ t.wake_hint }}</span></div>
       <label for="refresh_minutes">{{ t.refresh }}</label>
       <div class="row">{{ t.refresh_every }} <input type="number" id="refresh_minutes" name="refresh_minutes" min="0" max="120" value="{{ cfg.schedule.refresh_minutes }}" style="width:90px"> {{ t.minutes }} <span class="hint">{{ t.refresh_hint }}</span></div>
       <label>{{ t.weekdays }}</label>

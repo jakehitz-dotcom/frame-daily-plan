@@ -19,7 +19,9 @@ LOG_FILE = os.path.join(config.DATA, 'frame-daily-plan.log')
 PREVIEW = os.path.join(config.DATA, 'preview.jpg')
 LAST_IMAGE = os.path.join(config.DATA, 'last.jpg')
 ART_CACHE = os.path.join(config.DATA, 'art')
-RETRY_AFTER = 2 * 60  # a sleeping TV (e.g. before anyone is in the room) is retried every 2 minutes
+RETRY_AFTER = 2 * 60  # after an error talking to an awake TV
+TICK = 15             # how often the scheduler looks; also how fast a TV waking up is noticed
+WAKE_EVERY = 10 * 60  # at most one wake-up attempt per 10 minutes
 
 lock = threading.Lock()  # one TV conversation at a time (scheduler and buttons)
 recent = collections.deque(maxlen=200)
@@ -54,6 +56,15 @@ def save_state(state):
 
 def now_local(cfg):
     return datetime.datetime.now(zoneinfo.ZoneInfo(cfg['timezone']))
+
+
+def learn_mac(cfg, state):
+    """Remember the TV's MAC address while it is awake, so it can be woken later."""
+    if not state.get('tv_mac'):
+        mac = tv.mac_address(cfg['tv_ip'])
+        if mac:
+            state['tv_mac'] = mac
+            log(f'TV MAC address {mac} saved (used to wake it)')
 
 
 def require_tv(cfg):
@@ -104,7 +115,7 @@ def delete_plans(a, state, keep=None):
     state['plan_ids'] = old + ([keep] if keep else [])
 
 
-def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False):
+def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False, woke=False):
     """Upload something temporary (plan, demo, message), show it, and tidy up.
 
     make_image(a, state) writes LAST_IMAGE. Shown inside the schedule window it is removed
@@ -116,6 +127,9 @@ def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False):
     with lock:
         state = load_state()
         a = tv.connect(cfg['tv_ip'])
+        learn_mac(cfg, state)
+        if woke and a.get_artmode() != 'on':
+            a.set_artmode('on')  # we woke an empty room's TV: Art Mode, never a TV programme
         current = (a.get_current() or {}).get('content_id')
         if current and current not in state['plan_ids']:
             state['restore_id'] = current  # the family's normal artwork
@@ -142,12 +156,13 @@ def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False):
         return state
 
 
-def show_plan(cfg, refresh=False):
+def show_plan(cfg, refresh=False, woke=False):
     def make(a, state):
         data = plan_data.build(cfg, now_local(cfg))
         render.render(data, LAST_IMAGE, artwork_background(cfg, a, state.get('restore_id')))
         return data['errors']
-    state = put_temporary(cfg, make, 'Plan updated' if refresh else 'Plan', kind='plan', only_if_changed=refresh)
+    state = put_temporary(cfg, make, 'Plan updated' if refresh else 'Plan', kind='plan', only_if_changed=refresh,
+                          woke=woke)
     if in_window(cfg, now_local(cfg)):  # a manual plan at 06:30 must not stop the 07:00 one
         state['shown_on'] = now_local(cfg).date().isoformat()
         save_state(state)
@@ -180,6 +195,7 @@ def restore(cfg):
     with lock:
         state = load_state()
         a = tv.connect(cfg['tv_ip'])
+        learn_mac(cfg, state)
         if state.get('restore_id'):
             a.select_image(state['restore_id'], show=a.get_artmode() == 'on')
             log(f'Artwork {state["restore_id"]} restored')
@@ -198,6 +214,7 @@ def upload_artwork(cfg, src_path, mode='crop'):
     with lock:
         state = load_state()
         a = tv.connect(cfg['tv_ip'])
+        learn_mac(cfg, state)
         with open(fitted, 'rb') as f:
             cid = tv.send_image(a, f.read())
         show = a.get_artmode() == 'on'
@@ -232,22 +249,53 @@ def _due(cfg, state, now):
     return 'restore' if state.get('restore_due') else None
 
 
+def tick(cfg, now, memo):
+    """One scheduler step. A Frame that sleeps between motion is the normal case:
+    - the plan is due but the TV sleeps: wake it (Wake-on-LAN) so the plan is already the selected
+      artwork when the first person walks in, then let the TV's motion timer put it back to sleep;
+    - a refresh is due but the TV sleeps: wait quietly; the refresh stays due, so it runs within
+      one tick of the TV waking up (motion), on top of the plan it is already showing;
+    - the window has ended: put the artwork back the next time the TV is awake.
+    memo keeps what is only worth knowing between ticks (last wake attempt, asleep already logged)."""
+    state = load_state()
+    action = _due(cfg, state, now)
+    if not action or time.time() < memo.get('retry_at', 0):
+        return None
+    woke = False
+    if not tv.awake(cfg['tv_ip']):
+        mac = state.get('tv_mac') or cfg.get('tv_mac')
+        if action == 'show' and cfg.get('wake_tv', True) and mac and time.time() - memo.get('woke_at', 0) >= WAKE_EVERY:
+            memo['woke_at'] = time.time()
+            log('Waking the TV for the plan')
+            woke = tv.wake(cfg['tv_ip'], mac)
+            if not woke:
+                log('The TV did not wake up (is "Power On with Mobile" on?). The plan goes up as soon as it wakes.')
+        if not woke:
+            if not memo.get('asleep_logged'):
+                memo['asleep_logged'] = True
+                if action != 'show' or not mac:
+                    what = {'show': 'the plan', 'refresh': 'the plan update', 'restore': 'putting the artwork back'}[action]
+                    log(f'TV asleep: {what} goes ahead as soon as it wakes')
+            return None
+    memo['asleep_logged'] = False
+    if action == 'restore':
+        restore(cfg)
+    else:
+        show_plan(cfg, refresh=action == 'refresh', woke=woke)
+    return action
+
+
 def scheduler():
-    retry_at = 0.0
+    memo = {}
     while True:
         try:
             cfg = config.load()
-            action = _due(cfg, load_state(), now_local(cfg))
-            if action and time.time() >= retry_at:
-                if action == 'restore':
-                    restore(cfg)
-                else:
-                    show_plan(cfg, refresh=action == 'refresh')
-        except Exception as e:  # noqa: BLE001  e.g. TV switched off: try again in a few minutes
+            tick(cfg, now_local(cfg), memo)
+        except Exception as e:  # noqa: BLE001  e.g. the TV dropped off mid-upload: try again shortly
             log(f'Error ({type(e).__name__}: {e}), retrying in {RETRY_AFTER // 60} minutes')
             traceback.print_exc()
-            retry_at = time.time() + RETRY_AFTER
-        time.sleep(30)
+            memo['retry_at'] = time.time() + RETRY_AFTER
+        time.sleep(TICK)
 
 
 def start_scheduler():

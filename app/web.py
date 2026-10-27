@@ -143,6 +143,9 @@ def pair():
     ok = len(steps) == 3 and all(r == 'ok' for _, r, _, _ in steps)
     if ok:
         open(os.path.join(config.DATA, 'paired'), 'w').close()
+        state = jobs.load_state()
+        jobs.learn_mac(config.load(), state)
+        jobs.save_state(state)
     jobs.log(f'Connect: {text}')
     return redirect(url_for('index', msg=f"{t['connected'] if ok else t['not_connected']} – {text}"))
 
@@ -230,6 +233,8 @@ def save_settings():
     f = request.form
     cfg = config.load()
     cfg['tv_ip'] = f.get('tv_ip', '').strip()
+    cfg['tv_mac'] = f.get('tv_mac', '').strip().lower()
+    cfg['wake_tv'] = 'wake_tv' in f
     tz = f.get('timezone', '').strip()
     try:
         zoneinfo.ZoneInfo(tz)
@@ -278,6 +283,26 @@ def _read_ha_fields(f, cfg):
     if url and '://' not in url:
         url = 'http://' + url
     cfg['home_assistant'] = dict(cur, url=url, token=f.get('ha_token', '').strip() or cur.get('token', ''))
+
+
+@app.post('/wake')
+@protected
+def wake_now():
+    """Test Wake-on-LAN: put the TV to sleep (walk away), then press this."""
+    cfg = config.load()
+    state = jobs.load_state()
+    mac = state.get('tv_mac') or cfg.get('tv_mac')
+    if tv.awake(cfg['tv_ip']):
+        jobs.learn_mac(cfg, state)
+        jobs.save_state(state)
+        text = 'the TV is already awake' + (f' (MAC {state["tv_mac"]} saved)' if state.get('tv_mac') else '')
+    elif not mac:
+        text = 'no MAC address yet: it is saved the next time the TV is awake, or enter it under TV & schedule'
+    else:
+        text = 'the TV woke up' if tv.wake(cfg['tv_ip'], mac) else \
+            'no answer within a minute: check "Power On with Mobile" on the TV (Settings → General → Network → Expert Settings)'
+    jobs.log(f'Wake TV: {text}')
+    return redirect(url_for('index', msg=f'Wake TV: {text}'))
 
 
 @app.post('/ha-test')

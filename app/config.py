@@ -8,6 +8,8 @@ CONFIG_FILE = os.path.join(DATA, 'config.json')
 
 DEFAULTS = {
     'tv_ip': '',
+    'tv_mac': 'cc:20:ac:c6:57:f5',  # Wake-on-LAN (kitchen Frame, from Home Assistant); also learned while the TV is awake
+    'wake_tv': True,   # wake a sleeping TV at the start of the plan window
     'timezone': os.environ.get('TZ') or 'UTC',
     'ui_lang': 'en',
     'plan_lang': 'en',
