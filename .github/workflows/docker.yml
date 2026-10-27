@@ -25,7 +25,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/justifytechexpenses/frame-daily-plan  # registry names must be lowercase
+          images: ghcr.io/${{ github.repository }}  # whoever owns this copy (metadata-action lowercases it)
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
