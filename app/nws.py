@@ -3,6 +3,8 @@
 - now(stations): the latest observation from the first station with a fresh one (e.g. KTOA, then KHHR)
 - outlook(lat, lon, ...): one line about significant weather in the next 7 days, from the point
   forecast (twice-daily periods) and active alerts for the location
+- local(lat, lon, ...): now / high / low / rain chance / sky for the 2.5 km forecast grid cell the
+  house is in: one forecaster-adjusted source, so the numbers agree with each other
 """
 import datetime
 import re
@@ -12,13 +14,84 @@ import requests
 HEADERS = {'User-Agent': 'frame-daily-plan (github.com/jakehitz-dotcom/frame-daily-plan)', 'Accept': 'application/geo+json'}
 TIMEOUT = 15
 STALE = datetime.timedelta(hours=2)
-_forecast_urls = {}  # (lat, lon) -> forecast URL; the grid point never moves
+_points = {}         # (lat, lon) -> the point's properties (forecast URLs); the grid cell never moves
+_cache = {}          # url -> (fetched at, json): one fetch per 10 minutes serves every view
+FRESH = 600
 
 
 def _get(url):
     r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
+
+
+def _cached(url):
+    import time
+    hit = _cache.get(url)
+    if hit and time.time() - hit[0] < FRESH:
+        return hit[1]
+    body = _get(url)
+    _cache[url] = (time.time(), body)
+    return body
+
+
+def point(lat, lon):
+    key = (round(lat, 4), round(lon, 4))
+    if key not in _points:
+        _points[key] = _get(f'https://api.weather.gov/points/{key[0]},{key[1]}')['properties']
+    return _points[key]
+
+
+def _intervals(values, tz):
+    """NWS grid values ('2026-10-27T21:00:00+00:00/PT2H') as (start, end, value), local time."""
+    out = []
+    for v in values or []:
+        if v.get('value') is None:
+            continue
+        start_s, _, dur = v['validTime'].partition('/')
+        start = datetime.datetime.fromisoformat(start_s).astimezone(tz)
+        m = re.fullmatch(r'P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?', dur)
+        hours = int(m.group(1) or 0) * 24 + int(m.group(2) or 0) + int(m.group(3) or 0) / 60 if m else 1
+        out.append((start, start + datetime.timedelta(hours=hours), v['value']))
+    return out
+
+
+def _c_to_f(c):
+    return c * 9 / 5 + 32
+
+
+def local(lat, lon, now, tz):
+    """{'now_f', 'hi_f', 'lo_f', 'pop', 'text', 'icon'} for the grid cell at (lat, lon).
+    hi/lo cover the local calendar day: the hourly temperatures plus the grid's day maximum and
+    overnight minimum (so hours already past still count). Missing parts are None."""
+    p = point(lat, lon)
+    grid = _cached(p['forecastGridData'])['properties']
+    today = now.date()
+    temps = _intervals((grid.get('temperature') or {}).get('values'), tz)
+    current = next((v for s, e, v in temps if s <= now < e), None)
+    todays = [v for s, e, v in temps if s.date() == today or (s < now < e)]
+    highs = [v for s, e, v in _intervals((grid.get('maxTemperature') or {}).get('values'), tz) if s.date() == today]
+    lows = [v for s, e, v in _intervals((grid.get('minTemperature') or {}).get('values'), tz)
+            if e.date() == today or s.date() == today and s.hour < 6]
+    pops = [v for s, e, v in _intervals((grid.get('probabilityOfPrecipitation') or {}).get('values'), tz)
+            if s.date() == today and e > now]
+    hi = max(todays + highs) if todays or highs else None
+    lo = min(todays + lows) if todays or lows else None
+    text = icon = None
+    try:
+        hourly = _cached(p['forecastHourly'])['properties']['periods']
+        hour = next((h for h in hourly if datetime.datetime.fromisoformat(h['startTime']) <= now
+                     < datetime.datetime.fromisoformat(h['endTime'])), hourly[0] if hourly else None)
+        if hour:
+            text = hour.get('shortForecast', '')
+            icon = sky_icon(text, not hour.get('isDaytime', True))
+            if current is None and hour.get('temperatureUnit') == 'F':
+                current = (hour['temperature'] - 32) * 5 / 9
+    except Exception:  # noqa: BLE001  the numbers still stand without the sky text
+        pass
+    f = lambda c: None if c is None else round(_c_to_f(c))  # noqa: E731
+    return {'now_f': f(current), 'hi_f': f(hi), 'lo_f': f(lo), 'pop': round(max(pops)) if pops else None,
+            'text': text, 'icon': icon}
 
 
 def sky_icon(text, night=False):
@@ -52,20 +125,8 @@ def now(stations, at=None):
     return None
 
 
-_periods_cache = {}  # (lat, lon) -> (fetched at, periods): one fetch serves today's high, the outlook and the week
-
-
 def periods(lat, lon):
-    import time
-    key = (round(lat, 4), round(lon, 4))
-    hit = _periods_cache.get(key)
-    if hit and time.time() - hit[0] < 600:
-        return hit[1]
-    if key not in _forecast_urls:
-        _forecast_urls[key] = _get(f'https://api.weather.gov/points/{key[0]},{key[1]}')['properties']['forecast']
-    result = _get(_forecast_urls[key])['properties']['periods']
-    _periods_cache[key] = (time.time(), result)
-    return result
+    return _cached(point(lat, lon)['forecast'])['properties']['periods']
 
 
 def today_high(lat, lon, today, tz):

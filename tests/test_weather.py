@@ -93,21 +93,73 @@ def test_forecast_high_low_uv_window(monkeypatch):
     assert wx['hint'] == 'T-shirt + light jacket AM/PM · sunscreen'
 
 
-def test_high_never_below_now_and_nws_high_preferred(monkeypatch):
-    cfg = {'weather': {'lat': 33.77, 'lon': -118.36, 'unit': 'F'}, 'timezone': 'America/Los_Angeles', 'plan_lang': 'en'}
-    today = datetime.date(2026, 10, 27)
-    data = {'weather': {'max': 67, 'min': 56, 'now': 75, 'rain': 0, 'uv': {'max': 7}, 'hint': ''}, 'errors': []}
-    monkeypatch.setattr(nws, 'today_high', lambda lat, lon, d, tz: 72)          # NWS: 72, but it's 75 out
-    plan_data.reconcile_temps(cfg, data, today, LA)
-    assert (data['weather']['max'], data['weather']['min']) == (75, 56)
-    assert data['weather']['hint'] == 'Shorts & T-shirt · sunscreen' or data['weather']['hint'].startswith('T-shirt')
-    data = {'weather': {'max': 67, 'min': 56, 'now': 66, 'rain': 0, 'uv': {'max': 3}, 'hint': ''}, 'errors': []}
-    plan_data.reconcile_temps(cfg, data, today, LA)
-    assert data['weather']['max'] == 72                                              # NWS beats Open-Meteo's 67
-    monkeypatch.setattr(nws, 'today_high', lambda lat, lon, d, tz: None)        # evening: NWS has no "today"
-    data = {'weather': {'max': 67, 'min': 56, 'now': 52, 'rain': 0, 'uv': {'max': 0}, 'hint': ''}, 'errors': []}
-    plan_data.reconcile_temps(cfg, data, today, LA)
-    assert (data['weather']['max'], data['weather']['min']) == (67, 52)              # low follows a colder night
+def grid(now_c=23.9, rows=None):
+    """A slice of /gridpoints/LOX/x,y shaped like the real thing (values in °C, ISO intervals)."""
+    hours = rows or [('2026-10-27T13:00:00+00:00/PT2H', 14.0), ('2026-10-27T15:00:00+00:00/PT3H', 17.2),
+                     ('2026-10-27T18:00:00+00:00/PT3H', 21.1), ('2026-10-27T21:00:00+00:00/PT1H', now_c),
+                     ('2026-10-27T22:00:00+00:00/PT2H', 22.8), ('2026-10-28T00:00:00+00:00/PT4H', 18.3),
+                     ('2026-10-28T04:00:00+00:00/PT6H', 15.6)]
+    return {'properties': {
+        'temperature': {'uom': 'wmoUnit:degC', 'values': [{'validTime': t, 'value': v} for t, v in hours]},
+        'maxTemperature': {'values': [{'validTime': '2026-10-27T14:00:00+00:00/PT13H', 'value': 24.4}]},
+        'minTemperature': {'values': [{'validTime': '2026-10-27T02:00:00+00:00/PT14H', 'value': 13.3}]},
+        'probabilityOfPrecipitation': {'values': [{'validTime': '2026-10-27T13:00:00+00:00/PT11H', 'value': 5},
+                                                  {'validTime': '2026-10-28T00:00:00+00:00/PT6H', 'value': 20}]}}}
+
+
+def fake_point(monkeypatch, grid_body, hourly_text='Sunny', day=True):
+    hourly = {'properties': {'periods': [{'startTime': '2026-10-27T14:00:00-07:00', 'endTime': '2026-10-27T15:00:00-07:00',
+                                          'temperature': 75, 'temperatureUnit': 'F', 'isDaytime': day,
+                                          'shortForecast': hourly_text}]}}
+    monkeypatch.setattr(nws, 'point', lambda lat, lon: {'forecastGridData': 'grid', 'forecastHourly': 'hourly', 'forecast': 'fc'})
+    monkeypatch.setattr(nws, '_cached', lambda url: {'grid': grid_body, 'hourly': hourly}[url])
+
+
+def test_grid_cell_now_high_low_agree(monkeypatch):
+    fake_point(monkeypatch, grid())
+    at = datetime.datetime(2026, 10, 27, 14, 30, tzinfo=LA)                   # 21:30 UTC
+    g = nws.local(33.77, -118.36, at, LA)
+    assert g == {'now_f': 75, 'hi_f': 76, 'lo_f': 56, 'pop': 20, 'text': 'Sunny', 'icon': '☀️'}
+    assert g['lo_f'] <= g['now_f'] <= g['hi_f']
+
+
+def test_weather_panel_is_local_and_consistent(monkeypatch):
+    fake_point(monkeypatch, grid(now_c=25.0))                                 # 77°F now, grid max 76°F
+    cfg = {'weather': {'lat': 33.77, 'lon': -118.36, 'unit': 'F'}, 'timezone': 'America/Los_Angeles', 'plan_lang': 'en',
+           'home_assistant': {'url': '', 'token': '', 'entities': {}}}
+    data = {'weather': {'icon': '☁️', 'max': 67, 'min': 58, 'text': 'Cloudy', 'rain': 0, 'uv': {'max': 7}, 'hint': ''},
+            'errors': []}
+    plan_data.local_weather(cfg, data, datetime.datetime(2026, 10, 27, 14, 30, tzinfo=LA), LA, plan_data.words(cfg))
+    wx = data['weather']
+    assert (wx['now'], wx['max'], wx['min'], wx['source']) == (77, 77, 56, 'grid')     # high lifted to now
+    assert wx['text'] == 'Sunny now' and wx['icon'] == '☀️'
+    assert wx['hint'] == 'T-shirt + light jacket AM/PM · sunscreen'
+
+
+def test_outdoor_sensor_wins_for_now(monkeypatch):
+    import ha
+    fake_point(monkeypatch, grid())
+    monkeypatch.setattr(ha, 'configured', lambda cfg: True)
+    monkeypatch.setattr(ha, 'state', lambda e, cfg: {'state': '71.6', 'attributes': {'unit_of_measurement': '°F'}})
+    cfg = {'weather': {'lat': 33.77, 'lon': -118.36, 'unit': 'F'}, 'timezone': 'America/Los_Angeles', 'plan_lang': 'en',
+           'home_assistant': {'url': 'http://ha', 'token': 't', 'entities': {'outdoor_temp': 'sensor.backyard_temperature'}}}
+    data = {'weather': {'icon': '☁️', 'max': 67, 'min': 58, 'text': 'Cloudy', 'rain': 0, 'uv': {'max': 3}, 'hint': ''},
+            'errors': []}
+    plan_data.local_weather(cfg, data, datetime.datetime(2026, 10, 27, 14, 30, tzinfo=LA), LA, plan_data.words(cfg))
+    assert (data['weather']['now'], data['weather']['source'], data['weather']['max']) == (72, 'sensor', 76)
+
+
+def test_grid_down_falls_back_to_airport_and_still_agrees(monkeypatch):
+    def down(*a):
+        raise OSError('api.weather.gov unreachable')
+    monkeypatch.setattr(nws, 'local', down)
+    monkeypatch.setattr(nws, 'now', lambda stations: {'station': 'KTOA', 'text': 'Clear', 'icon': '☀️', 'temp_f': 75})
+    cfg = {'weather': {'lat': 33.77, 'lon': -118.36, 'unit': 'F'}, 'timezone': 'America/Los_Angeles', 'plan_lang': 'en',
+           'home_assistant': {'url': '', 'token': '', 'entities': {}}}
+    data = {'weather': {'icon': '☁️', 'max': 67, 'min': 58, 'text': 'Cloudy', 'rain': 0, 'uv': {'max': 7}, 'hint': ''},
+            'errors': []}
+    plan_data.local_weather(cfg, data, datetime.datetime(2026, 10, 27, 14, 30, tzinfo=LA), LA, plan_data.words(cfg))
+    assert (data['weather']['now'], data['weather']['max'], data['weather']['text']) == (75, 75, 'Clear now')
 
 
 def test_today_high_from_periods(monkeypatch):

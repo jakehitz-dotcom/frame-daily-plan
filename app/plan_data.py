@@ -35,7 +35,7 @@ WORDS = {
            'hint_rain': 'Regenjacke mitnehmen', 'hint_cold': 'Warme Jacke anziehen',
            'hint_cool': 'Pulli oder Jacke mitnehmen', 'hint_hot': 'Viel trinken und Sonnencreme', 'now': 'Jetzt: {}',
            'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet'},
-    'en': {'all_day': 'All day', 'holiday': 'Holiday', 'changeable': 'Changeable', 'rain': 'rain',
+    'en': {'all_day': 'All day', 'holiday': 'Holiday', 'changeable': 'Changeable', 'rain': 'chance of rain',
            'hint_rain': 'Bring a rain jacket', 'hint_cold': 'Wear a warm coat',
            'hint_cool': 'Bring a sweater or jacket', 'hint_hot': 'Drink plenty, wear sunscreen', 'now': '{} now',
            'quiet': 'Quiet week ahead: no storms or rain expected'},
@@ -147,8 +147,6 @@ def weather(cfg, day, w):
     uv_max = max((d.get('uv_index_max') or [0])[0] or 0, max(body['hourly']['uv_index'] or [0], key=lambda v: v or 0) or 0)
     entry = WEATHER_CODES.get(code)
     icon, text = (entry[0], entry[1 if cfg.get('plan_lang') == 'de' else 2]) if entry else ('⛅', w['changeable'])
-    if 30 <= rain < 50:
-        text += f", {rain} % {w['rain']}"
     hi_f, lo_f = tmax * 9 / 5 + 32, tmin * 9 / 5 + 32
     if loc.get('unit', 'F') == 'F':
         tmax, tmin = hi_f, lo_f
@@ -165,32 +163,60 @@ def sky_now(cfg, data, w):
     obs = nws.now(stations)
     if not obs:
         return
-    data['weather'].update(icon=obs['icon'], station=obs['station'],
-                           text=w['now'].format(obs['text']) + (f", {data['weather']['rain']} % {w['rain']}"
-                                                                 if 30 <= data['weather']['rain'] < 50 else ''))
+    data['weather'].update(icon=obs['icon'], station=obs['station'], text=w['now'].format(obs['text']))
     if obs['temp_f'] is not None:
         t = obs['temp_f'] if cfg['weather'].get('unit', 'F') == 'F' else round((obs['temp_f'] - 32) * 5 / 9)
         data['weather']['now'] = t
 
 
-def reconcile_temps(cfg, data, today, tz):
-    """High from the NWS forecast (forecaster-adjusted; Open-Meteo's raw model often runs cool near the
-    coast), then made consistent with the thermometer: the high is never below the temperature right now,
-    nor the low above it. The dressing advice follows the corrected numbers."""
+def local_weather(cfg, data, now, tz, w):
+    """Make the weather panel about the house: now / high / low / rain chance / sky from the NWS 2.5 km
+    grid cell at the house's coordinates (one forecaster-adjusted source, so they agree). Falls back to
+    the nearest airport observation and the Open-Meteo day. An outdoor sensor in Home Assistant, if
+    configured, gives the reading 'now'. The high is never below now, the low never above it, and the
+    dressing advice follows the final numbers."""
     wx, loc = data['weather'], cfg['weather']
     unit = loc.get('unit', 'F')
     to_unit = (lambda f: f) if unit == 'F' else (lambda f: round((f - 32) * 5 / 9))
     to_f = (lambda t: t) if unit == 'F' else (lambda t: t * 9 / 5 + 32)
+    grid = {}
     try:
-        hi = nws.today_high(loc['lat'], loc['lon'], today, tz)
-        if hi is not None:
-            wx['max'] = to_unit(hi)
-    except Exception as e:  # noqa: BLE001  keep the Open-Meteo high
-        data['errors'].append(f'NWS high: {e}')
+        grid = nws.local(loc['lat'], loc['lon'], now, tz)
+    except Exception as e:  # noqa: BLE001
+        data['errors'].append(f'NWS grid: {e}')
+    if grid.get('hi_f') is not None:
+        wx['max'] = to_unit(grid['hi_f'])
+    if grid.get('lo_f') is not None:
+        wx['min'] = to_unit(grid['lo_f'])
+    if grid.get('pop') is not None:
+        wx['rain'] = grid['pop']
+    if grid.get('now_f') is not None:
+        wx['now'] = to_unit(grid['now_f'])
+        wx['source'] = 'grid'
+    if grid.get('text'):
+        wx.update(icon=grid['icon'], text=w['now'].format(grid['text'][:1].upper() + grid['text'][1:].lower()))
+    else:
+        try:
+            sky_now(cfg, data, w)  # nearest airport (KTOA, then KHHR)
+        except Exception as e:  # noqa: BLE001
+            data['errors'].append(f'NWS observation: {e}')
+    sensor = ((cfg.get('home_assistant') or {}).get('entities') or {}).get('outdoor_temp')
+    if sensor and ha.configured(cfg):
+        try:
+            st = ha.state(sensor, cfg)
+            reading = float(st['state'])
+            unit_ha = (st.get('attributes') or {}).get('unit_of_measurement', '°F')
+            reading_f = reading if 'F' in unit_ha else reading * 9 / 5 + 32
+            wx['now'], wx['source'] = to_unit(round(reading_f)), 'sensor'
+        except Exception as e:  # noqa: BLE001  unavailable sensor: the grid value stands
+            data['errors'].append(f'Outdoor sensor: {e}')
     if wx.get('now') is not None:
         wx['max'] = max(wx['max'], wx['now'])
         wx['min'] = min(wx['min'], wx['now'])
-    wx['hint'] = dress(to_f(wx['max']), to_f(wx['min']), wx.get('rain', 0), (wx.get('uv') or {}).get('max') or 0,
+    rain = wx.get('rain') or 0
+    if 30 <= rain < 50:
+        wx['text'] = wx['text'].split(', ')[0] + f", {rain}% {w['rain']}"
+    wx['hint'] = dress(to_f(wx['max']), to_f(wx['min']), rain, (wx.get('uv') or {}).get('max') or 0,
                        cfg.get('plan_lang', 'en'))
 
 
@@ -291,11 +317,7 @@ def build(cfg, now):
         except Exception as e:  # noqa: BLE001  the plan must still appear without weather
             errors.append(f'Weather: {e}')
         if data['weather']:
-            try:
-                sky_now(cfg, data, w)
-            except Exception as e:  # noqa: BLE001  the forecast text stays
-                errors.append(f'NWS observation: {e}')
-            reconcile_temps(cfg, data, today, tz)
+            local_weather(cfg, data, now, tz, w)
             try:
                 data['weather']['outlook'] = nws.outlook(loc['lat'], loc['lon'], today, tz) or w['quiet']
             except Exception as e:  # noqa: BLE001

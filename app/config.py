@@ -31,6 +31,7 @@ DEFAULTS = {
         'dishwasher_clean': 'input_boolean.dishwasher_clean',  # on = cycle finished, door not opened since
         'wind_7d': 'input_number.rolling_hills_max_wind_7_day',
         'rain_7d': 'input_number.rolling_hills_rain_7_day',
+        'outdoor_temp': '',                     # an outdoor thermometer at the house; '' = the NWS grid cell
         'last_bottle': 'sensor.finn_bottle',   # Huckleberry: time of the last bottle
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
         'hide_button': 'input_button.frame_planner_hide',  # pressed: back to the artwork now

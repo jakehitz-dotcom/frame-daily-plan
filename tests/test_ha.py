@@ -201,6 +201,7 @@ def test_weather_panel_uses_ktoa_now_and_the_nws_outlook(monkeypatch):
     monkeypatch.setattr(ha, 'snapshot', lambda cfg: _snap())
     monkeypatch.setattr(plan_data, 'weather', lambda cfg, day, w: {'icon': '☁️', 'max': 73, 'min': 56, 'text': 'Cloudy',
                                                                  'rain': 10, 'uv': {'max': 7}, 'hint': 'T-shirt'})
+    monkeypatch.setattr(nws, 'local', lambda lat, lon, now, tz: {})        # grid unavailable: airport fallback
     monkeypatch.setattr(nws, 'now', lambda stations: {'station': stations[0], 'text': 'Partly cloudy', 'icon': '⛅', 'temp_f': 66})
     monkeypatch.setattr(nws, 'outlook', lambda lat, lon, today, tz: 'Rain Sat night–Sun (70%)')
     cfg = config.load()
