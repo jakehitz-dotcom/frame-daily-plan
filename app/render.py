@@ -398,11 +398,10 @@ def render(day, out, background_path=None):
     d.text((c1[0] + 14, M + 220), L['date'].format(day=date.day, month=L['months'][date.month - 1]), font=font(96, 'Medium'), fill=SOFT)
     month(d, date, c1[0] + 70, top + 50, c1[1] - c1[0] - 140, row=74 if bar else 86)
 
-    # A quiet reminder of how to add or tick off tasks, right of the title (split after the colon).
+    # A quiet reminder of how to add or tick off tasks, right of the title: two lines, split at '|'.
     hint = (day.get('todo_hint') or '').strip()
     if hint:
-        head, _, tail = hint.partition(':')
-        lines = [head + ':', tail.strip()] if tail else [hint]
+        lines = [t.strip() for t in hint.split('|') if t.strip()][:2]
         size = 40
         room = c1[1] - 70 - (c1[0] + 70 + d.textlength(day.get('todo_title', L['todos']), font=font(86, 'DemiBold')) + 50)
         while size > 28 and max(d.textlength(t, font=font(size, 'Medium')) for t in lines) > room:

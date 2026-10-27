@@ -43,7 +43,17 @@ def test_todo_hint_setting_saves_and_reaches_the_plan():
     import zoneinfo
     import plan_data
     cfg = config.load()
-    assert cfg['todo_hint'].startswith('Alexa, add to my to-do list:')
+    assert cfg['todo_hint'] == 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete'
     cfg['weather']['enabled'] = False
     data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 8, tzinfo=zoneinfo.ZoneInfo('Europe/London')))
     assert data['todo_hint'] == cfg['todo_hint']
+
+
+def test_old_saved_hint_is_replaced_by_the_new_default():
+    cfg = config.load()
+    cfg['todo_hint'] = 'Alexa, add to my to-do list: [task] · or check it off in the app'
+    config.save(cfg)
+    assert config.load()['todo_hint'] == 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete'
+    cfg['todo_hint'] = 'My own words | second line'
+    config.save(cfg)
+    assert config.load()['todo_hint'] == 'My own words | second line'      # a custom hint is kept

@@ -44,11 +44,17 @@ DEFAULTS = {
                   {'date': '08-09', 'text': 'Happy Birthday Finn!'}],
     'greetings': True,             # birthdays and American holiday greetings
     'christmas_countdown': True,   # Dec 1-24
-    'todo_hint': 'Alexa, add to my to-do list: [task] · or check it off in the app',  # beside the To do title; '' = none
+    # beside the To do title, '|' between its two lines; '' = none
+    'todo_hint': 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete',
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }
 
 COLORS = ['green', 'blue', 'orange', 'red', 'grey']
+
+
+# Earlier default texts, replaced by the current default when found unchanged in a saved config.
+RETIRED = {'todo_hint': ['Alexa, add to my to-do list: [task] · or check it off in the app',
+                         'Alexa, ask Easy Task to: add [task] OR complete [task]']}
 
 
 def load():
@@ -65,6 +71,9 @@ def load():
                         cfg[key][k] = v
             else:
                 cfg[key] = value
+    for key, old in RETIRED.items():
+        if cfg.get(key) in old:
+            cfg[key] = DEFAULTS[key]
     return cfg
 
 
