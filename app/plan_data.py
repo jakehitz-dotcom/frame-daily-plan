@@ -261,7 +261,7 @@ def build(cfg, now):
     for e in events:
         e['past'] = bool(cfg.get('dim_past_events')) and e['end_dt'] is not None and e['end_dt'] <= now
     data = {'date': today.isoformat(), 'lang': cfg.get('plan_lang', 'en'), 'today': events,
-            'tomorrow': events_tomorrow, 'todos': sorted(set(todos)), 'weather': None, 'errors': errors}
+            'tomorrow': events_tomorrow, 'todos': sorted(set(todos)), 'todos_done': [], 'weather': None, 'errors': errors}
     loc = cfg.get('weather') or {}
     if loc.get('enabled') and loc.get('lat') is not None and loc.get('lon') is not None:
         try:
@@ -285,9 +285,21 @@ def build(cfg, now):
             lists, missing = ha.resolve_todo_lists(lists, cfg)
             if missing:
                 errors.append(f"To-do lists not found in Home Assistant: {', '.join(missing)}")
+            open_, done = [], []
             for entity, items in (ha.todo_items(lists, cfg) if lists else {}).items():
-                data['todos'] = sorted(set(data['todos']) | {i['summary'] for i in items
-                                                             if not i['due'] or i['due'] <= today.isoformat()})
+                for i in items:
+                    if i['done']:  # completed today (local time) stays, checked off, until midnight
+                        try:
+                            at = datetime.datetime.fromisoformat(i['completed']).astimezone(tz)
+                        except (TypeError, ValueError):
+                            continue
+                        if at.date() == today:
+                            done.append((at, i['summary']))
+                    elif not i['due'] or i['due'] <= today.isoformat():
+                        open_.append(i['summary'])
+            # the list's own order (Google Tasks: newest on top), then calendar to-dos; latest ticked off first
+            data['todos'] = list(dict.fromkeys(open_ + data['todos']))
+            data['todos_done'] = [s for _, s in sorted(done, reverse=True) if s not in data['todos']]
         except Exception as e:  # noqa: BLE001
             errors.append(f'To-do lists: {e}')
     data['home'], data['week'] = {}, {}

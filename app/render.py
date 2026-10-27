@@ -30,7 +30,7 @@ LABELS = {
            'months': ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September',
                       'Oktober', 'November', 'Dezember'],
            'initials': 'MDMDFSS', 'today': 'Heute', 'tomorrow': 'Morgen', 'todos': 'Zu erledigen',
-           'no_todos': 'Nichts zu erledigen', 'no_events': 'Keine Termine', 'more': '… und weitere', 'more_n': '… und {} weitere',
+           'no_todos': 'Nichts zu erledigen', 'no_events': 'Keine Termine', 'more': '… und weitere', 'more_n': '… und {} weitere', 'done_hidden': '({} weitere erledigte {})', 'task': 'Aufgabe', 'tasks': 'Aufgaben', 'open_hidden': '({} weitere offen{} nicht gezeigt)', 'and_done': ' · {} erledigt',
            'past': 'vorbei', 'night': 'bis {}° in der Nacht', 'all_day': 'Ganztägig',
            'date': '{day}. {month}', 'week': 'Nächste 7 Tage', 'wind': '{} km/h Böen', 'rain': '{} mm Regen',
            'inside': 'Drinnen', 'heat': 'Heizen auf', 'cool': 'Kühlen auf', 'heat_cool': 'Automatik',
@@ -43,7 +43,7 @@ LABELS = {
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
                       'October', 'November', 'December'],
            'initials': 'MTWTFSS', 'today': 'Today', 'tomorrow': 'Tomorrow', 'todos': 'To do',
-           'no_todos': 'Nothing to do', 'no_events': 'No events', 'more': '… and more', 'more_n': '… and {} more',
+           'no_todos': 'Nothing to do', 'no_events': 'No events', 'more': '… and more', 'more_n': '… and {} more', 'done_hidden': '({} additional completed {})', 'task': 'task', 'tasks': 'tasks', 'open_hidden': '({} more to do{} not shown)', 'and_done': ' · {} completed',
            'past': 'done', 'night': 'down to {}° tonight', 'all_day': 'All day',
            'date': '{month} {day}', 'week': 'Next 7 days', 'wind': '{} mph peak', 'rain': '{} in rain',
            'inside': 'Inside', 'heat': 'Heating to', 'cool': 'Cooling to', 'heat_cool': 'Auto',
@@ -162,6 +162,64 @@ def weather_panel(im, d, wx, week, x, x1, top):
                     d.text((x, y), line, font=font(size, 'Medium'), fill=DIM if quiet else CREAM)
                 y += round(size * 1.22)
     return y + 40
+
+
+TODO_FULL, TODO_SMALLEST = 80, 46   # text size of a to-do line, normal and the smallest it shrinks to
+FOOTER = 62                          # the small "(… not shown)" line
+
+
+def todo_row(size):
+    """Row height: airy at full size, tighter as the text shrinks for a long list."""
+    return round(size * (1.56 if size >= 70 else 1.38))
+
+
+def plan_todos(open_, done, height):
+    """Which to-dos fit, at what size, and what the small footer says:
+    1. all fit at full size; 2. otherwise completed ones are hidden and counted; 3. open ones shrink
+    to fit; 4. at the smallest size, what still does not fit is counted too."""
+    row = todo_row
+    if (len(open_) + len(done)) * row(TODO_FULL) <= height:
+        return TODO_FULL, open_, done, None
+    room = height - (FOOTER if done else 0)
+    size = TODO_FULL
+    while size > TODO_SMALLEST and len(open_) * row(size) > room:
+        size -= 2
+    if len(open_) * row(size) <= room:
+        footer = L['done_hidden'].format(len(done), L['task'] if len(done) == 1 else L['tasks']) if done else None
+        return size, open_, [], footer
+    fits = max(1, (height - FOOTER) // row(TODO_SMALLEST))
+    footer = L['open_hidden'].format(len(open_) - fits, L['and_done'].format(len(done)) if done else '')
+    return TODO_SMALLEST, open_[:fits], [], footer
+
+
+def todo_list(d, open_, done, x, x1, y, bottom):
+    if not open_ and not done:
+        d.text((x, y), L['no_todos'], font=font(70, 'Medium'), fill=DIM)
+        return
+    size, show_open, show_done, footer = plan_todos(open_, done, bottom - y)
+    tx, max_w = x + round(size * 1.56), x1 - x - round(size * 1.56)
+    while size > 48 and any(d.textlength(t, font=font(size, 'Medium')) > max_w for t in show_open + show_done):
+        size -= 2  # one size for the whole list, shrunk until the longest item fits the panel
+    row, box = todo_row(size), round(size * 1.06)
+    f = font(size, 'Medium')
+    for i, text in enumerate(show_open + show_done):
+        is_done = i >= len(show_open)
+        top = y + (row - box) // 2 - round(size * 0.12)
+        if is_done:
+            d.rounded_rectangle([x, top, x + box, top + box], radius=round(box * 0.21), fill=(150, 98, 52))
+            d.line([(x + box * 0.24, top + box * 0.52), (x + box * 0.43, top + box * 0.70), (x + box * 0.77, top + box * 0.30)],
+                   fill=CREAM, width=max(5, round(size * 0.1)), joint='curve')
+        else:
+            d.rounded_rectangle([x, top, x + box, top + box], radius=round(box * 0.21), outline=ORANGE,
+                                width=max(6, round(size * 0.11)))
+        ty = top + (box - size) // 2 - round(size * 0.08)
+        d.text((tx, ty), text, font=f, fill=DIM if is_done else CREAM)
+        if is_done:
+            mid = ty + round(size * 0.62)
+            d.line([(tx, mid), (tx + d.textlength(text, font=f), mid)], fill=DIM, width=max(3, round(size * 0.06)))
+        y += row
+    if footer:
+        d.text((x, bottom - FOOTER + 8), footer, font=font(46, 'Medium'), fill=DIM)
 
 
 def home_items(home):
@@ -350,22 +408,8 @@ def render(day, out, background_path=None):
             d.text((c1[1] - 70, y), t, font=font(size, 'Medium'), fill=DIM, anchor='ra')
             y += round(size * 1.25)
 
-    # To-dos with empty boxes.
-    y = todo_top + 155
-    if not day.get('todos'):
-        d.text((c1[0] + 70, y), L['no_todos'], font=font(70, 'Medium'), fill=DIM)
-    todos = day.get('todos', [])
-    fits = (bottom - 40 - y) // 125
-    if len(todos) > fits:
-        todos = todos[:fits - 1] + [L['more_n'].format(len(todos) - fits + 1)]
-    # One size for the whole list, shrunk until the longest item fits inside the panel.
-    size, max_w = 80, c1[1] - (c1[0] + 195) - 50
-    while size > 52 and any(d.textlength(t, font=font(size, 'Medium')) > max_w for t in todos):
-        size -= 2
-    for todo in todos:
-        d.rounded_rectangle([c1[0] + 70, y + 10, c1[0] + 155, y + 95], radius=18, outline=ORANGE, width=9)
-        d.text((c1[0] + 195, y + (80 - size) // 2), todo, font=font(size, 'Medium'), fill=CREAM)
-        y += 125
+    # To-dos: open ones first (empty boxes), then today's completed ones (ticked, struck through).
+    todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 155, bottom - 40)
 
     events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40)
 

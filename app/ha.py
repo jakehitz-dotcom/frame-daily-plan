@@ -69,17 +69,19 @@ def todo_lists(cfg=None):
 
 
 def todo_items(entity_ids, cfg=None):
-    """Open items of Home Assistant to-do lists (Google Tasks, Shopping List, Todoist, ...):
-    {entity_id: [{'summary': ..., 'due': 'YYYY-MM-DD' or None}]}. todo.get_items only reads."""
+    """Items of Home Assistant to-do lists (Google Tasks, Shopping List, Todoist, ...), in the list's
+    own order: {entity_id: [{'summary', 'due': 'YYYY-MM-DD' or None, 'done': bool, 'completed': ISO or None}]}.
+    todo.get_items only reads."""
     url, token = settings(cfg)
     if not (url and token):
         raise RuntimeError('Home Assistant address or token not set')
     r = requests.post(f'{url}/api/services/todo/get_items?return_response', headers=_headers(token), timeout=TIMEOUT,
-                      json={'entity_id': list(entity_ids), 'status': 'needs_action'})
+                      json={'entity_id': list(entity_ids)})
     r.raise_for_status()
     out = {}
     for entity, body in (r.json().get('service_response') or {}).items():
-        out[entity] = [{'summary': i.get('summary', '').strip(), 'due': (i.get('due') or '')[:10] or None}
+        out[entity] = [{'summary': i.get('summary', '').strip(), 'due': (i.get('due') or '')[:10] or None,
+                        'done': i.get('status') == 'completed', 'completed': i.get('completed')}
                        for i in body.get('items', []) if i.get('summary', '').strip()]
     return out
 

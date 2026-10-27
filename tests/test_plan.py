@@ -221,3 +221,19 @@ def test_show_for_wakes_a_sleeping_tv(monkeypatch):
     before = jobs.time.time()
     jobs.show_for(dict(CFG, tv_ip='192.0.2.1'), 30)
     assert calls['wake'] == 1 and got['woke'] and 29 * 60 < got['until'] - before <= 30 * 60 + 1
+
+
+def test_todo_overflow_rules():
+    import render
+    render.L = render.LABELS['en']
+    row = round(render.TODO_FULL * 1.56)
+    three = 385                                                          # the real panel: three full rows
+    o = lambda n: [f'open {i}' for i in range(n)]
+    c = lambda n: [f'done {i}' for i in range(n)]
+    assert render.plan_todos(o(2), c(1), three) == (80, o(2), c(1), None)             # 1. all fit
+    assert render.plan_todos(o(2), c(3), three) == (80, o(2), [], '(3 additional completed tasks)')  # 2.
+    assert render.plan_todos(o(3), c(1), three)[3] == '(1 additional completed task)'
+    size, shown, done, foot = render.plan_todos(o(5), [], three)                     # 3. shrink to fit
+    assert render.TODO_SMALLEST <= size < 80 and shown == o(5) and foot is None
+    size, shown, done, foot = render.plan_todos(o(12), c(2), three)                  # 4. smallest + count
+    assert size == render.TODO_SMALLEST and foot == f'({12 - len(shown)} more to do · 2 completed not shown)'

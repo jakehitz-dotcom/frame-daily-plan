@@ -153,10 +153,14 @@ def test_google_tasks_via_home_assistant(monkeypatch):
 
     def items(entity_ids, cfg):
         seen['lists'] = entity_ids
-        return {'todo.my_tasks': [{'summary': 'Renew registration', 'due': '2026-10-20'},   # overdue
-                                  {'summary': 'Call the plumber', 'due': '2026-10-27'},     # today
-                                  {'summary': 'Book flights', 'due': None},                 # undated
-                                  {'summary': 'Plan the party', 'due': '2026-11-03'}]}      # later: waits
+        return {'todo.my_tasks': [
+            {'summary': 'Renew registration', 'due': '2026-10-20', 'done': False, 'completed': None},  # newest on top
+            {'summary': 'Call the plumber', 'due': '2026-10-27', 'done': False, 'completed': None},
+            {'summary': 'Book flights', 'due': None, 'done': False, 'completed': None},
+            {'summary': 'Plan the party', 'due': '2026-11-03', 'done': False, 'completed': None},       # later: waits
+            {'summary': 'Unload the dishwasher', 'due': None, 'done': True, 'completed': '2026-10-27T16:05:00+00:00'},
+            {'summary': 'Birthday cards', 'due': None, 'done': True, 'completed': '2026-10-27T17:30:00+00:00'},
+            {'summary': 'Pay rent', 'due': None, 'done': True, 'completed': '2026-10-26T18:00:00+00:00'}]}  # yesterday
     monkeypatch.setattr(ha, 'todo_items', items)
     monkeypatch.setattr(ha, 'snapshot', lambda cfg: {})
     cfg = config.load()
@@ -164,7 +168,8 @@ def test_google_tasks_via_home_assistant(monkeypatch):
     cfg['weather']['enabled'] = False
     data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 8, tzinfo=zoneinfo.ZoneInfo('America/Los_Angeles')))
     assert seen['lists'] == ['todo.my_tasks']
-    assert data['todos'] == ['Book flights', 'Call the plumber', 'Renew registration']
+    assert data['todos'] == ['Renew registration', 'Call the plumber', 'Book flights']   # the list's own order
+    assert data['todos_done'] == ['Birthday cards', 'Unload the dishwasher']            # today, latest first
 
 
 def test_todo_items_reads_the_service_response(monkeypatch):
@@ -175,14 +180,17 @@ def test_todo_items_reads_the_service_response(monkeypatch):
         def json(self):
             return {'changed_states': [], 'service_response': {'todo.my_tasks': {'items': [
                 {'summary': 'Book flights', 'uid': '1', 'status': 'needs_action'},
-                {'summary': 'Call the plumber', 'uid': '2', 'status': 'needs_action', 'due': '2026-10-27'}]}}}
+                {'summary': 'Call the plumber', 'uid': '2', 'status': 'needs_action', 'due': '2026-10-27'},
+                {'summary': 'Charge the car', 'uid': '3', 'status': 'completed', 'completed': '2026-10-27T17:00:00+00:00'}]}}}
     sent = {}
     monkeypatch.setattr(ha.requests, 'post', lambda url, **kw: sent.update(url=url, **kw) or R())
     out = ha.todo_items(['todo.my_tasks'], {'home_assistant': {'url': 'http://ha:8123', 'token': 't'}})
     assert sent['url'] == 'http://ha:8123/api/services/todo/get_items?return_response'
-    assert sent['json'] == {'entity_id': ['todo.my_tasks'], 'status': 'needs_action'}
-    assert out == {'todo.my_tasks': [{'summary': 'Book flights', 'due': None},
-                                     {'summary': 'Call the plumber', 'due': '2026-10-27'}]}
+    assert sent['json'] == {'entity_id': ['todo.my_tasks']}
+    assert out == {'todo.my_tasks': [
+        {'summary': 'Book flights', 'due': None, 'done': False, 'completed': None},
+        {'summary': 'Call the plumber', 'due': '2026-10-27', 'done': False, 'completed': None},
+        {'summary': 'Charge the car', 'due': None, 'done': True, 'completed': '2026-10-27T17:00:00+00:00'}]}
 
 
 def test_weather_panel_uses_ktoa_now_and_the_nws_outlook(monkeypatch):
