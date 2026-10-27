@@ -4,6 +4,7 @@ samsungframetv @ https://github.com/NickWaterton/samsung-tv-ws-api/archive/66a4d
 requests==2.32.5
 pillow==11.3.0
 icalendar==6.3.1
+python-dateutil==2.9.0.post0
 recurring-ical-events==3.8.0
 holidays==0.84
 flask==3.1.2

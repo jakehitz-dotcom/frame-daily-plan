@@ -8,6 +8,7 @@ Fonts are Inter and Noto Color Emoji (both OFL, bundled in fonts/).
 import calendar
 import datetime
 import os
+import re
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -36,7 +37,8 @@ LABELS = {
            'hot_tub': 'Whirlpool', 'dishwasher': 'Spülmaschine', 'clean': 'Sauber',
            'bottle': 'Letzte Flasche {}', 'ago': 'vor {}', 'hilo': 'Hoch {}°  ·  Tief {}°',
            'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': '6+ {}–{}',
-           'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet'},
+           'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet',
+           'xmas_days': 'Tage bis Weihnachten', 'xmas_tomorrow': 'Morgen ist Weihnachten!'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
                       'October', 'November', 'December'],
@@ -48,7 +50,8 @@ LABELS = {
            'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean',
            'bottle': 'Last bottle {}', 'ago': '{} ago', 'hilo': 'High {}°  ·  Low {}°',
            'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': '6+ {}–{}',
-           'quiet': 'Quiet week ahead: no storms or rain expected'},
+           'quiet': 'Quiet week ahead: no storms or rain expected',
+           'xmas_days': 'days until Christmas', 'xmas_tomorrow': 'Christmas is tomorrow!'},
 }
 L = LABELS['de']  # set per render
 
@@ -323,7 +326,9 @@ def render(day, out, background_path=None):
     panel(layer, (c3[0], wx_bottom + 50, c3[1], bottom), L['tomorrow'])
     if bar:
         panel(layer, bar)
-    im = Image.alpha_composite(bg, layer)
+    # Text and icons go on their own transparent layer: combined with the panels by true alpha
+    # compositing, the plan can be scaled down under a banner without fringes.
+    im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
 
     # Date, top left.
@@ -375,7 +380,84 @@ def render(day, out, background_path=None):
     if day.get('quote'):
         d.text((W // 2, 2010), day['quote'], font=font(92, 'Medium'), fill=CREAM, anchor='mm')
 
-    im.convert('RGB').save(out, quality=90)
+    content = Image.alpha_composite(layer, im)
+    if day.get('banner') or day.get('countdown') is not None:
+        final = with_banner(bg, content, day.get('banner'), day.get('countdown'))
+    else:
+        final = Image.alpha_composite(bg, content)
+    final.convert('RGB').save(out, quality=90)
+
+
+# ── Banner across the top (custom message, birthday, holiday, Christmas countdown) ──────────────
+EMOJI_RUN = re.compile('([\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u2190-\u21FF\u2300-\u23FF]'
+                       '[\uFE0F\u200D\U0001F3FB-\U0001F3FF\U0001F000-\U0001FAFF\u2600-\u27BF]*)')
+FESTIVE_RED, FESTIVE_GREEN = (236, 96, 92), (110, 196, 140)
+BANNER = (60, 220)                 # the banner's top and bottom edge
+CONTENT = (140, 2090)              # the plan's used rows, scaled into the space below the banner
+
+
+def rich_width(d, text, size, weight):
+    return sum(size * 1.05 if EMOJI_RUN.fullmatch(p) else d.textlength(p, font=font(size, weight))
+               for p in EMOJI_RUN.split(text) if p)
+
+
+def draw_rich(im, d, text, x, y, size, weight, fill):
+    """Text with emoji in it (Inter has none): words in the font, emoji as colour images."""
+    for part in EMOJI_RUN.split(text):
+        if not part:
+            continue
+        if EMOJI_RUN.fullmatch(part):
+            emoji(im, part, x + size * 0.03, y + size * 0.08, size * 0.95)
+            x += size * 1.05
+        else:
+            d.text((x, y), part, font=font(size, weight), fill=fill)
+            x += d.textlength(part, font=font(size, weight))
+    return x
+
+
+def countdown_parts(days):
+    if days == 1:
+        return [('🎄 ', CREAM), (L['xmas_tomorrow'], FESTIVE_GREEN), (' 🎁', CREAM)]
+    return [('🎄 ', CREAM), (str(days), FESTIVE_RED), (' ' + L['xmas_days'], FESTIVE_GREEN), (' 🎅', CREAM)]
+
+
+def with_banner(bg, content, banner, countdown):
+    """The banner strip on top, the whole plan scaled evenly into the space beneath it."""
+    y0, y1 = BANNER
+    gap, bottom = 40, H - 60
+    s = (bottom - (y1 + gap)) / (CONTENT[1] - CONTENT[0])
+    part = content.crop((0, CONTENT[0], W, CONTENT[1])).convert('RGBa')  # premultiplied: clean edges when scaled
+    part = part.resize((round(W * s), round((CONTENT[1] - CONTENT[0]) * s)), Image.LANCZOS).convert('RGBA')
+    canvas = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    canvas.paste(part, ((W - part.width) // 2, y1 + gap))
+    x0, x1 = round((W - W * s) / 2 + M * s), round(W - (W - W * s) / 2 - M * s)   # line up with the panels below
+    strip = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    panel(strip, (x0, y0, x1, y1))
+    out = Image.alpha_composite(Image.alpha_composite(bg, strip), canvas)
+    txt = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(txt)
+    cd = countdown_parts(countdown) if countdown is not None else None
+    cd_size = 60
+    cd_w = sum(rich_width(d, t, cd_size, 'DemiBold') for t, _ in cd) if cd else 0
+    if banner and banner.get('text'):
+        room = x1 - x0 - 140 - (cd_w + 80 if cd else 0)
+        size = 92
+        while size > 52 and rich_width(d, banner['text'], size, 'DemiBold') > room:
+            size -= 4
+        bw = rich_width(d, banner['text'], size, 'DemiBold')
+        bx = x0 + 70 + (room - bw) / 2 if not cd else x0 + 70
+        draw_rich(txt, d, banner['text'], bx, (y0 + y1) / 2 - size * 0.62, size, 'DemiBold', CREAM)
+        if cd:
+            cx = x1 - 70 - cd_w
+            for t, colour in cd:
+                cx = draw_rich(txt, d, t, cx, (y0 + y1) / 2 - cd_size * 0.62, cd_size, 'DemiBold', colour)
+    elif cd:  # the countdown alone takes the banner
+        size = 84
+        width = sum(rich_width(d, t, size, 'DemiBold') for t, _ in cd)
+        cx = (W - width) / 2
+        for t, colour in cd:
+            cx = draw_rich(txt, d, t, cx, (y0 + y1) / 2 - size * 0.62, size, 'DemiBold', colour)
+    return Image.alpha_composite(out, txt)
 
 
 def fit_artwork(src, out, mode='crop'):

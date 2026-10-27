@@ -290,6 +290,30 @@ def _read_ha_fields(f, cfg):
                                                if e.strip().startswith('todo.')]
 
 
+@app.post('/banner')
+@protected
+def set_banner():
+    """Save (or clear) the banner and its options, render a preview, and update the TV if the
+    plan is on it right now."""
+    f = request.form
+    cfg = config.load()
+    clear = f.get('action') == 'clear'
+    cfg['banner'] = {'text': '' if clear else f.get('banner_text', '').strip(),
+                     'until': '' if clear else f.get('banner_until', '').strip()}
+    cfg['greetings'] = 'greetings' in f
+    cfg['christmas_countdown'] = 'christmas_countdown' in f
+    config.save(cfg)
+    jobs.log('Banner cleared' if clear or not cfg['banner']['text'] else
+             f"Banner “{cfg['banner']['text'][:40]}”" + (f" until {cfg['banner']['until']}" if cfg['banner']['until'] else ''))
+    try:
+        jobs.preview(cfg)
+    except Exception as e:  # noqa: BLE001
+        jobs.log(f'Preview failed: {e}')
+    if jobs.load_state().get('showing') == 'plan':
+        threading.Thread(target=jobs.refresh_now, args=(cfg,), daemon=True).start()
+    return redirect(url_for('index', msg=ui()['banner_saved']))
+
+
 @app.post('/wake')
 @protected
 def wake_now():

@@ -34,6 +34,12 @@ DEFAULTS = {
     }, 'show_minutes': 30,
         'todo_lists': [],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
     },
+    # Banner across the top of the plan: a custom message wins over birthdays, which win over holidays.
+    'banner': {'text': '', 'until': ''},  # until: last day shown (YYYY-MM-DD), '' = until cleared
+    'birthdays': [{'date': '02-01', 'text': 'Happy Birthday Mike!'}, {'date': '07-26', 'text': 'Happy Birthday Jake!'},
+                  {'date': '08-09', 'text': 'Happy Birthday Finn!'}],
+    'greetings': True,             # birthdays and American holiday greetings
+    'christmas_countdown': True,   # Dec 1-24
     'todo_hint': 'Alexa, ask Easy Task to: add [task] OR complete [task]',  # beside the To do title; '' = none
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }

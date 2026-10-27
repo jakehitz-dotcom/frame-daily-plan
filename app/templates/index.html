@@ -109,6 +109,26 @@
   </section>
 
   <section class="card">
+    <h2>{{ t.banner }}</h2>
+    <p class="hint">{{ t.banner_hint }}</p>
+    <form method="post" action="{{ url_for('set_banner') }}">
+      <input type="text" name="banner_text" value="{{ cfg.banner.text }}" placeholder="{{ t.banner_ph }}" maxlength="80">
+      <div class="row" style="margin-top:10px">
+        {{ t.banner_until }} <input type="date" name="banner_until" value="{{ cfg.banner.until }}" style="width:180px">
+        <span class="hint">{{ t.banner_until_hint }}</span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <label class="inline"><input type="checkbox" name="greetings" {% if cfg.greetings %}checked{% endif %}> {{ t.greetings }}</label>
+        <label class="inline"><input type="checkbox" name="christmas_countdown" {% if cfg.christmas_countdown %}checked{% endif %}> {{ t.countdown }}</label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" name="action" value="save">{{ t.btn_banner }}</button>
+        <button name="action" value="clear">{{ t.btn_banner_clear }}</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
     <h2>{{ t.demo }}</h2>
     <p class="hint">{{ t.demo_hint }}</p>
     <form method="post" action="{{ url_for('demo') }}" class="row">

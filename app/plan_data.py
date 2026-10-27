@@ -10,6 +10,7 @@ import holidays
 import icalendar
 import recurring_ical_events
 
+import banner
 import ha
 import nws
 
@@ -277,6 +278,7 @@ def build(cfg, now):
             except Exception as e:  # noqa: BLE001
                 errors.append(f'NWS outlook: {e}')
     data['todo_hint'] = cfg.get('todo_hint', '')
+    data['banner'], data['countdown'] = banner.for_day(cfg, today)
     lists = (cfg.get('home_assistant') or {}).get('todo_lists') or []
     if lists and ha.configured(cfg):
         try:  # due today, overdue or undated; tasks dated later wait for their day

@@ -171,6 +171,15 @@ def show_plan(cfg, refresh=False, woke=False, until=None):
         save_state(state)
 
 
+def refresh_now(cfg):
+    """Redraw the plan on the TV now (e.g. after a banner change), if it is awake; never wakes it."""
+    try:
+        if tv.awake(cfg['tv_ip']):
+            show_plan(cfg, refresh=True)
+    except Exception as e:  # noqa: BLE001
+        log(f'Could not update the plan on the TV ({type(e).__name__}: {e})')
+
+
 def show_demo(cfg, lang='en', on_tv=True):
     """Made-up plan (no real data) for sharing; shown like a plan."""
     data = plan_data.demo(cfg, now_local(cfg), lang)
