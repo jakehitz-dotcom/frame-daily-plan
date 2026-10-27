@@ -72,6 +72,8 @@ def artwork_background(cfg, a, content_id):
     if cfg.get('background') != 'artwork' or not content_id:
         return None
     path = os.path.join(ART_CACHE, f'{content_id}.jpg')
+    if os.path.exists(path):
+        return path  # already have it (e.g. a picture uploaded here): no need to ask the TV
     try:
         data = tv.get_thumbnail(a, content_id)  # a small thumbnail is plenty for a blurred background
         os.makedirs(ART_CACHE, exist_ok=True)

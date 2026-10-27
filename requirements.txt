@@ -1,5 +1,6 @@
-# samsungtvws from NickWaterton's fork (Art Mode support), pinned to the tested commit
-samsungtvws @ https://github.com/NickWaterton/samsung-tv-ws-api/archive/fe95ef1d784cd32f49bf9a07ec479576574eea07.zip
+# samsungframetv (NickWaterton's fork, renamed from samsungtvws in 4.0), release 4.1.4:
+# uses get_thumbnail_list on art API 4+ (2022 and newer Frames) instead of the old get_thumbnail
+samsungframetv @ https://github.com/NickWaterton/samsung-tv-ws-api/archive/66a4d5bceb85e228dd3b6d15697ac1ae960f84f3.zip
 requests==2.32.5
 pillow==11.3.0
 icalendar==6.3.1

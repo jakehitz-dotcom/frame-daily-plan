@@ -10,14 +10,24 @@ import ipaddress
 import json
 import os
 import socket
+import threading
 import uuid
 
 import requests
-from samsungtvws import SamsungTVWS
+from samsungframetv import SamsungTVWS
 
 import config
 
 NAME = 'Frame Daily Plan'
+THUMBNAIL_LIMIT = 45  # seconds; a thumbnail that takes longer is skipped, never allowed to block the app
+
+
+def _legacy(a):
+    """True for 2017/2018 Frames (art API below 2), which need the one-frame workarounds below."""
+    try:
+        return a._legacy_api()
+    except Exception:  # noqa: BLE001  can't tell: keep the original behaviour
+        return True
 
 
 def _tv(ip, timeout):
@@ -47,6 +57,8 @@ def _send_image_binary(a, data, matte):
 
 
 def send_image(a, data, matte='none'):
+    if not _legacy(a):
+        return a.upload(data, file_type='JPEG', matte=matte, portrait_matte=matte)
     try:
         return _send_image_binary(a, data, matte)
     except Exception:  # noqa: BLE001  newer firmware: the library's own upload
@@ -76,17 +88,45 @@ def _thumbnail_binary(a, content_id, timeout=30):
     raise RuntimeError(f'no thumbnail received for {content_id}')
 
 
+def _thumbnail(a, content_id):
+    if _legacy(a):
+        try:
+            return _thumbnail_binary(a, content_id)
+        except Exception:  # noqa: BLE001  fall through to the library's own method
+            a.close()
+    data = a.get_thumbnail(content_id)  # 2022+ Frames: the library uses get_thumbnail_list
+    if isinstance(data, dict):
+        data = next(iter(data.values()))
+    if isinstance(data, list):
+        data = data[0]
+    if not data:
+        raise RuntimeError(f'TV sent no thumbnail for {content_id}')
+    return bytes(data)
+
+
 def get_thumbnail(a, content_id):
-    try:
-        return _thumbnail_binary(a, content_id)
-    except Exception:  # noqa: BLE001  newer firmware: the library's own method
-        a.close()
-        data = a.get_thumbnail(content_id)
-        if isinstance(data, dict):
-            data = next(iter(data.values()))
-        if isinstance(data, list):
-            data = data[0]
-        return bytes(data)
+    """The thumbnail transfer opens a raw socket with no timeout; on some firmware it never
+    sends anything and the whole app (which holds one lock per TV conversation) froze.
+    So it runs in its own thread with a hard limit, and on timeout the connection is dropped."""
+    result = {}
+
+    def work():
+        try:
+            result['data'] = _thumbnail(a, content_id)
+        except Exception as e:  # noqa: BLE001
+            result['error'] = e
+    worker = threading.Thread(target=work, name='thumbnail', daemon=True)  # daemon: never blocks a restart
+    worker.start()
+    worker.join(THUMBNAIL_LIMIT)
+    if worker.is_alive():
+        try:
+            a.close()  # the caller reopens a fresh connection for the upload
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f'thumbnail for {content_id} timed out after {THUMBNAIL_LIMIT}s')
+    if 'error' in result:
+        raise result['error']
+    return result['data']
 
 
 def status(ip):
