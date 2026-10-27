@@ -175,3 +175,49 @@ def test_window_end_restores_on_the_next_natural_wake(monkeypatch):
     assert jobs.tick(dict(CFG, wake_tv=True), d(10), {}) is None and calls['wake'] == 0
     awake[0] = True
     assert jobs.tick(dict(CFG, wake_tv=True), d(12), {}) == 'restore'
+
+
+def test_voice_request_shows_for_30_minutes_then_restores():
+    d = lambda h, m=0: datetime.datetime(2026, 10, 27, h, m, tzinfo=TZ)
+    cfg = dict(CFG, schedule=dict(CFG['schedule'], refresh_minutes=5))
+    st = {'shown_on': '2026-10-27', 'showing': 'plan', 'shown_at': d(19).timestamp(),
+          'until': d(19, 30).timestamp(), 'restore_due': False}
+    assert jobs._due(cfg, st, d(19, 2)) is None            # evening request, fresh
+    assert jobs._due(cfg, st, d(19, 6)) == 'refresh'       # kept up to date meanwhile
+    assert jobs._due(cfg, st, d(19, 30)) == 'restore'      # time is up
+    late = dict(st, shown_at=d(9, 50).timestamp(), until=d(10, 20).timestamp(), restore_due=True)
+    assert jobs._due(cfg, late, d(10, 5)) == 'refresh'     # asked at 9:50: the 30 minutes outlast the window
+    assert jobs._due(cfg, late, d(10, 20)) == 'restore'
+
+
+def test_show_button_press_is_acted_on_once(monkeypatch):
+    presses = iter(['2026-10-27T08:00:00', '2026-10-27T08:00:00', '2026-10-27T19:04:11', '2026-10-27T19:04:11'])
+    shown = []
+    monkeypatch.setattr(jobs.ha, 'configured', lambda cfg: True)
+    monkeypatch.setattr(jobs.ha, 'state', lambda entity, cfg: {'state': next(presses)})
+    monkeypatch.setattr(jobs, 'show_for', lambda cfg, minutes: shown.append(minutes))
+    monkeypatch.setattr(jobs.config, 'load', lambda: dict(CFG, home_assistant={
+        'url': 'http://ha', 'token': 't', 'show_minutes': 30, 'entities': {'show_button': 'input_button.frame_planner_show'}}))
+    sleeps = []
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        if len(sleeps) == 4:
+            raise KeyboardInterrupt
+    monkeypatch.setattr(jobs.time, 'sleep', fake_sleep)
+    try:
+        jobs.watch_home_assistant()
+    except KeyboardInterrupt:
+        pass
+    assert shown == [30]                                     # start-up reading ignored, one press, one showing
+
+
+def test_show_for_wakes_a_sleeping_tv(monkeypatch):
+    jobs.save_state({'plan_ids': [], 'tv_mac': 'aa:bb:cc:dd:ee:ff'})
+    awake = [False]
+    calls = _sleepy_tv(monkeypatch, awake, wakes=True)
+    got = {}
+    monkeypatch.setattr(jobs, 'show_plan', lambda cfg, refresh=False, woke=False, until=None: got.update(woke=woke, until=until))
+    before = jobs.time.time()
+    jobs.show_for(dict(CFG, tv_ip='192.0.2.1'), 30)
+    assert calls['wake'] == 1 and got['woke'] and 29 * 60 < got['until'] - before <= 30 * 60 + 1

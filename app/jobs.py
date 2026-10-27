@@ -10,6 +10,7 @@ import traceback
 import zoneinfo
 
 import config
+import ha
 import plan_data
 import render
 import tv
@@ -115,7 +116,7 @@ def delete_plans(a, state, keep=None):
     state['plan_ids'] = old + ([keep] if keep else [])
 
 
-def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False, woke=False):
+def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False, woke=False, until=None):
     """Upload something temporary (plan, demo, message), show it, and tidy up.
 
     make_image(a, state) writes LAST_IMAGE. Shown inside the schedule window it is removed
@@ -145,6 +146,8 @@ def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False, wo
         state['plan_ids'].append(cid)
         state['image_hash'] = digest
         state['showing'] = kind
+        if not only_if_changed:
+            state['until'] = until  # a timed showing (voice request); anything else shown replaces it
         state['restore_due'] = in_window(cfg, now_local(cfg))
         save_state(state)  # record the upload before anything else can fail
         show = a.get_artmode() == 'on'  # never interrupt a running TV programme
@@ -156,13 +159,13 @@ def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False, wo
         return state
 
 
-def show_plan(cfg, refresh=False, woke=False):
+def show_plan(cfg, refresh=False, woke=False, until=None):
     def make(a, state):
         data = plan_data.build(cfg, now_local(cfg))
         render.render(data, LAST_IMAGE, artwork_background(cfg, a, state.get('restore_id')))
         return data['errors']
     state = put_temporary(cfg, make, 'Plan updated' if refresh else 'Plan', kind='plan', only_if_changed=refresh,
-                          woke=woke)
+                          woke=woke, until=until)
     if in_window(cfg, now_local(cfg)):  # a manual plan at 06:30 must not stop the 07:00 one
         state['shown_on'] = now_local(cfg).date().isoformat()
         save_state(state)
@@ -201,6 +204,7 @@ def restore(cfg):
             log(f'Artwork {state["restore_id"]} restored')
         delete_plans(a, state)
         state['restore_due'] = False
+        state['until'] = None
         state['showing'] = None  # "Back to artwork" also stops today's refreshes
         save_state(state)
 
@@ -238,15 +242,17 @@ def in_window(cfg, now):
 def _due(cfg, state, now):
     if not cfg.get('tv_ip'):
         return None  # not set up yet
+    every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
+    refresh = 'refresh' if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every else None
     if in_window(cfg, now):
         if state.get('shown_on') != now.date().isoformat():
             return 'show'
-        every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
-        if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every:
-            return 'refresh'  # a message, demo or "Back to artwork" in between is left alone
-        return None
-    # After the window (or on a later day if the TV was unreachable): bring the artwork back once.
-    return 'restore' if state.get('restore_due') else None
+        return refresh  # a message, demo or "Back to artwork" in between is left alone
+    until = state.get('until') or 0
+    if until > now.timestamp():
+        return refresh  # asked for by voice: kept up to date until its time is up
+    # After the window or a timed showing (or later, if the TV was asleep): bring the artwork back once.
+    return 'restore' if state.get('restore_due') or until else None
 
 
 def tick(cfg, now, memo):
@@ -285,6 +291,44 @@ def tick(cfg, now, memo):
     return action
 
 
+def show_for(cfg, minutes):
+    """Show the plan now for `minutes` (a voice request): wake the TV if needed, then the scheduler
+    keeps it fresh and puts the artwork back when the time is up (or at the end of the window)."""
+    require_tv(cfg)
+    woke = False
+    if not tv.awake(cfg['tv_ip']):
+        mac = load_state().get('tv_mac') or cfg.get('tv_mac')
+        woke = bool(mac) and tv.wake(cfg['tv_ip'], mac)
+        if not woke:
+            raise RuntimeError('the TV is asleep and did not wake up')
+    show_plan(cfg, woke=woke, until=time.time() + minutes * 60)
+
+
+def watch_home_assistant():
+    """Poll the show button every few seconds; a press (its state is the time it was pressed)
+    shows the plan. The first reading after a start is only remembered, never acted on."""
+    last, failing = None, False
+    while True:
+        try:
+            cfg = config.load()
+            entity = ((cfg.get('home_assistant') or {}).get('entities') or {}).get('show_button')
+            if entity and ha.configured(cfg) and cfg.get('tv_ip'):
+                pressed = ha.state(entity, cfg).get('state')
+                if last is not None and pressed != last and pressed not in ('unknown', 'unavailable', None):
+                    minutes = int(cfg['home_assistant'].get('show_minutes', 30))
+                    log(f'Plan requested from Home Assistant: showing it for {minutes} minutes')
+                    try:
+                        show_for(cfg, minutes)
+                    except Exception as e:  # noqa: BLE001
+                        log(f'Could not show the plan ({type(e).__name__}: {e})')
+                last, failing = pressed, False
+        except Exception as e:  # noqa: BLE001  Home Assistant restarting: say so once
+            if not failing:
+                log(f'Home Assistant not reachable for the show button ({e}); still trying')
+            failing = True
+        time.sleep(3)
+
+
 def scheduler():
     memo = {}
     while True:
@@ -300,3 +344,4 @@ def scheduler():
 
 def start_scheduler():
     threading.Thread(target=scheduler, name='scheduler', daemon=True).start()
+    threading.Thread(target=watch_home_assistant, name='ha-watch', daemon=True).start()
