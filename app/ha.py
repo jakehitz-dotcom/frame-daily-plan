@@ -81,7 +81,7 @@ def todo_items(entity_ids, cfg=None):
     out = {}
     for entity, body in (r.json().get('service_response') or {}).items():
         out[entity] = [{'summary': i.get('summary', '').strip(), 'due': (i.get('due') or '')[:10] or None,
-                        'done': i.get('status') == 'completed', 'completed': i.get('completed')}
+                        'done': i.get('status') == 'completed', 'completed': i.get('completed'), 'uid': i.get('uid')}
                        for i in body.get('items', []) if i.get('summary', '').strip()]
     return out
 

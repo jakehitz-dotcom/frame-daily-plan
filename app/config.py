@@ -35,7 +35,7 @@ DEFAULTS = {
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
         'hide_button': 'input_button.frame_planner_hide',  # pressed: back to the artwork now
     }, 'show_minutes': 30,
-        'todo_lists': ['todo.jake_hitzeroth_s_list'],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
+        'todo_lists': ['todo.jakehitz_yahoo_com_to_do_list'],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
     },
     # Banner across the top of the plan: a custom message wins over birthdays, which win over holidays.
     'banner': {'text': '', 'until': ''},  # until: last day shown (YYYY-MM-DD), '' = until cleared
@@ -43,7 +43,7 @@ DEFAULTS = {
                   {'date': '08-09', 'text': 'Happy Birthday Finn!'}],
     'greetings': True,             # birthdays and American holiday greetings
     'christmas_countdown': True,   # Dec 1-24
-    'todo_hint': 'Alexa, ask Easy Task to: add [task] OR complete [task]',  # beside the To do title; '' = none
+    'todo_hint': 'Alexa, add to my to-do list: [task] · or check it off in the app',  # beside the To do title; '' = none
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }
 

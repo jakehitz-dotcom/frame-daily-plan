@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import os
+import sys
 import threading
 import time
 import traceback
@@ -11,6 +12,7 @@ import zoneinfo
 
 import config
 import ha
+import todo_track
 import plan_data
 import render
 import tv
@@ -379,10 +381,17 @@ def watch_home_assistant():
     """Poll the show and hide buttons every few seconds; a press (a button's state is the time it was
     pressed) shows the plan or brings the artwork back. The first reading after a start is only
     remembered, never acted on."""
-    last, failing = {}, False
+    last, failing, tracked_at = {}, False, 0.0
     while True:
         try:
             cfg = config.load()
+            if time.time() - tracked_at >= 60:  # notice tasks checked off on lists that drop them (Alexa)
+                tracked_at = time.time()
+                try:
+                    for summary in todo_track.poll(cfg):
+                        log(f'Task completed: {summary}')
+                except Exception as e:  # noqa: BLE001
+                    print('todo tracking:', e, file=sys.stderr)
             ents = (cfg.get('home_assistant') or {}).get('entities') or {}
             if ha.configured(cfg) and cfg.get('tv_ip'):
                 for key in ('show_button', 'hide_button'):

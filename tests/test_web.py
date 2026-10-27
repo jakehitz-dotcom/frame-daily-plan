@@ -43,7 +43,7 @@ def test_todo_hint_setting_saves_and_reaches_the_plan():
     import zoneinfo
     import plan_data
     cfg = config.load()
-    assert cfg['todo_hint'].startswith('Alexa, ask Easy Task to:')
+    assert cfg['todo_hint'].startswith('Alexa, add to my to-do list:')
     cfg['weather']['enabled'] = False
     data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 8, tzinfo=zoneinfo.ZoneInfo('Europe/London')))
     assert data['todo_hint'] == cfg['todo_hint']

@@ -188,9 +188,9 @@ def test_todo_items_reads_the_service_response(monkeypatch):
     assert sent['url'] == 'http://ha:8123/api/services/todo/get_items?return_response'
     assert sent['json'] == {'entity_id': ['todo.my_tasks']}
     assert out == {'todo.my_tasks': [
-        {'summary': 'Book flights', 'due': None, 'done': False, 'completed': None},
-        {'summary': 'Call the plumber', 'due': '2026-10-27', 'done': False, 'completed': None},
-        {'summary': 'Charge the car', 'due': None, 'done': True, 'completed': '2026-10-27T17:00:00+00:00'}]}
+        {'summary': 'Book flights', 'due': None, 'done': False, 'completed': None, 'uid': '1'},
+        {'summary': 'Call the plumber', 'due': '2026-10-27', 'done': False, 'completed': None, 'uid': '2'},
+        {'summary': 'Charge the car', 'due': None, 'done': True, 'completed': '2026-10-27T17:00:00+00:00', 'uid': '3'}]}
 
 
 def test_weather_panel_uses_ktoa_now_and_the_nws_outlook(monkeypatch):

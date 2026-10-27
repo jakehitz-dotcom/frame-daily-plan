@@ -13,6 +13,7 @@ import recurring_ical_events
 import banner
 import ha
 import nws
+import todo_track
 
 TODO_PREFIXES = ('to-do:', 'todo:', 'task:', 'aufgabe:')
 
@@ -297,9 +298,10 @@ def build(cfg, now):
                             done.append((at, i['summary']))
                     elif not i['due'] or i['due'] <= today.isoformat():
                         open_.append(i['summary'])
+            done += todo_track.done_today(today, tz)  # lists that drop checked-off tasks (Alexa): noticed by the app
             # the list's own order (Google Tasks: newest on top), then calendar to-dos; latest ticked off first
             data['todos'] = list(dict.fromkeys(open_ + data['todos']))
-            data['todos_done'] = [s for _, s in sorted(done, reverse=True) if s not in data['todos']]
+            data['todos_done'] = list(dict.fromkeys(s for _, s in sorted(done, reverse=True) if s not in data['todos']))
         except Exception as e:  # noqa: BLE001
             errors.append(f'To-do lists: {e}')
     data['home'], data['week'] = {}, {}
