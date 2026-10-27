@@ -18,7 +18,15 @@ DEFAULTS = {
     'schedule': {'enabled': True, 'start': '07:00', 'end': '10:00', 'days': [0, 1, 2, 3, 4, 5, 6],
                  'refresh_minutes': 5},  # 0 = show once per morning
     'dim_past_events': True,
-    'home_assistant': {'url': '', 'token': ''},  # read-only REST access, see ha.py
+    # read-only REST access, see ha.py; entities: which Home Assistant entities feed the plan ('' = not shown)
+    'home_assistant': {'url': '', 'token': '', 'entities': {
+        'thermostat': 'climate.den_thermostat',            # inside temperature + set temperature by mode
+        'indoor_temp': '',                                  # a separate indoor sensor; empty = the thermostat's reading
+        'hot_tub': 'sensor.back_patio_time_machine_current_temperature',
+        'dishwasher_clean': 'input_boolean.dishwasher_clean',  # on = cycle finished, door not opened since
+        'wind_7d': 'input_number.rolling_hills_max_wind_7_day',
+        'rain_7d': 'input_number.rolling_hills_rain_7_day',
+    }},
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }
 
@@ -32,7 +40,11 @@ def load():
             stored = json.load(f)
         for key, value in stored.items():
             if isinstance(value, dict) and isinstance(cfg.get(key), dict):
-                cfg[key].update(value)
+                for k, v in value.items():
+                    if isinstance(v, dict) and isinstance(cfg[key].get(k), dict):
+                        cfg[key][k].update(v)
+                    else:
+                        cfg[key][k] = v
             else:
                 cfg[key] = value
     return cfg

@@ -43,6 +43,11 @@ def state(entity_id, cfg=None):
     return _get(f'states/{entity_id}', cfg)
 
 
+def snapshot(cfg=None):
+    """Every entity's state in one request, as {entity_id: state dict}."""
+    return {s['entity_id']: s for s in _get('states', cfg)}
+
+
 def states(cfg=None, domain=None):
     """All entities, or only one domain such as 'sensor' or 'lock'."""
     all_states = _get('states', cfg)

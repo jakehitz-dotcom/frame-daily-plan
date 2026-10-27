@@ -17,6 +17,9 @@ CREAM = (255, 249, 238)
 SOFT = (214, 210, 200)
 DIM = (165, 162, 155)
 ORANGE = (242, 150, 60)
+HEAT = (240, 106, 90)
+COOL = (110, 170, 245)
+CLEAN = (120, 200, 150)
 COLORS = {'green': (120, 200, 170), 'orange': ORANGE, 'blue': (120, 160, 220), 'red': (232, 112, 112), 'grey': (170, 170, 170)}
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONTS = os.path.join(HERE, 'fonts')
@@ -26,16 +29,20 @@ LABELS = {
            'months': ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September',
                       'Oktober', 'November', 'Dezember'],
            'initials': 'MDMDFSS', 'today': 'Heute', 'tomorrow': 'Morgen', 'todos': 'Zu erledigen',
-           'no_todos': 'Nichts zu erledigen', 'no_events': 'Keine Termine', 'more': '… und weitere',
+           'no_todos': 'Nichts zu erledigen', 'no_events': 'Keine Termine', 'more': '… und weitere', 'more_n': '… und {} weitere',
            'past': 'vorbei', 'night': 'bis {}° in der Nacht', 'all_day': 'Ganztägig',
-           'date': '{day}. {month}'},
+           'date': '{day}. {month}', 'week': 'Nächste 7 Tage', 'wind': '{} km/h Böen', 'rain': '{} mm Regen',
+           'inside': 'Drinnen', 'heat': 'Heizen auf', 'cool': 'Kühlen auf', 'heat_cool': 'Automatik',
+           'hot_tub': 'Whirlpool', 'dishwasher': 'Spülmaschine', 'clean': 'Sauber'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
                       'October', 'November', 'December'],
            'initials': 'MTWTFSS', 'today': 'Today', 'tomorrow': 'Tomorrow', 'todos': 'To do',
-           'no_todos': 'Nothing to do', 'no_events': 'No events', 'more': '… and more',
+           'no_todos': 'Nothing to do', 'no_events': 'No events', 'more': '… and more', 'more_n': '… and {} more',
            'past': 'done', 'night': 'down to {}° tonight', 'all_day': 'All day',
-           'date': '{month} {day}'},
+           'date': '{month} {day}', 'week': 'Next 7 days', 'wind': '{} mph peak', 'rain': '{} in rain',
+           'inside': 'Inside', 'heat': 'Heating to', 'cool': 'Cooling to', 'heat_cool': 'Auto',
+           'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean'},
 }
 L = LABELS['de']  # set per render
 
@@ -50,6 +57,52 @@ def font(size, weight='Regular'):
         name = {'Bold': 'Bold', 'DemiBold': 'SemiBold', 'Medium': 'Medium', 'Regular': 'Regular'}[weight]
         _fonts[key] = ImageFont.truetype(os.path.join(FONTS, f'Inter-{name}.ttf'), key[0])
     return _fonts[key]
+
+
+def emoji(im, ch, x, y, size):
+    """Noto Color Emoji only draws at 109 px, so draw there and scale (x, y = top left)."""
+    tile = Image.new('RGBA', (140, 140), (0, 0, 0, 0))
+    ImageDraw.Draw(tile).text((0, 0), ch, font=ImageFont.truetype(EMOJI, 109), embedded_color=True)
+    tile = tile.crop(tile.getbbox() or (0, 0, 140, 140))
+    scale = size / max(tile.size)
+    tile = tile.resize((max(1, round(tile.width * scale)), max(1, round(tile.height * scale))), Image.LANCZOS)
+    im.alpha_composite(tile, (round(x + (size - tile.width) / 2), round(y + (size - tile.height) / 2)))
+
+
+def home_items(home):
+    """(emoji, label, [(text, colour), ...]) for the Home bar, in reading order."""
+    items = []
+    if 'inside' in home:
+        items.append(('🏠', L['inside'], [(f"{home['inside']}°", CREAM)]))
+    s = home.get('set')
+    if s:
+        if s['mode'] == 'heat_cool':
+            items.append(('🌡️', L['heat_cool'], [(f"{s['temps'][0]}°", HEAT), (' – ', SOFT), (f"{s['temps'][1]}°", COOL)]))
+        else:
+            items.append(('🔥' if s['mode'] == 'heat' else '❄️', L[s['mode']],
+                          [(f"{s['temps'][0]}°", HEAT if s['mode'] == 'heat' else COOL)]))
+    if 'hot_tub' in home:
+        items.append(('♨️', L['hot_tub'], [(f"{home['hot_tub']}°", CREAM)]))
+    if home.get('dishwasher_clean'):
+        items.append(('🍽️', L['dishwasher'], [(L['clean'], CLEAN)]))
+    return items
+
+
+def home_bar(im, box, items):
+    """One calm row along the bottom: icon, small label, big value, evenly spaced."""
+    d = ImageDraw.Draw(im)
+    x0, y0, x1, y1 = box
+    cell = (x1 - x0) / len(items)
+    lf, vf = font(48, 'Medium'), font(88, 'DemiBold')
+    for i, (icon, label, parts) in enumerate(items):
+        text_w = max(d.textlength(label, font=lf), sum(d.textlength(t, font=vf) for t, _ in parts))
+        x = x0 + i * cell + (cell - 130 - text_w) / 2  # each item centred in its share of the bar
+        emoji(im, icon, x, y0 + (y1 - y0 - 96) / 2, 96)
+        d.text((x + 130, y0 + 18), label, font=lf, fill=DIM)
+        tx = x + 130
+        for text, colour in parts:
+            d.text((tx, y0 + 64), text, font=vf, fill=colour)
+            tx += d.textlength(text, font=vf)
 
 
 def wrap(d, text, f, max_w, max_lines=2):
@@ -123,13 +176,13 @@ def events(d, items, x, y, w, bottom, scale=1.0):
         y += need
 
 
-def month(d, date, x, y, w):
+def month(d, date, x, y, w, row=86):
     d.text((x, y), L['months'][date.month - 1], font=font(72, 'DemiBold'), fill=CREAM)
     cw = w / 7
-    y += 110
+    y += 110 if row == 86 else 100
     for i, wd in enumerate(L['initials']):
         d.text((x + cw * i + cw / 2, y), wd, font=font(52, 'Medium'), fill=DIM, anchor='mt')
-    y += 80
+    y += 80 if row == 86 else 70
     for week in calendar.Calendar().monthdayscalendar(date.year, date.month):
         for i, day in enumerate(week):
             if not day:
@@ -139,7 +192,7 @@ def month(d, date, x, y, w):
                 d.ellipse([cx - 46, cy - 46, cx + 46, cy + 46], fill=ORANGE)
             d.text((cx, cy), str(day), font=font(58, 'DemiBold' if day == date.day else 'Medium'),
                    fill=CREAM if day == date.day or i < 5 else SOFT, anchor='mm')
-        y += 86
+        y += row
 
 
 def render(day, out, background_path=None):
@@ -152,27 +205,38 @@ def render(day, out, background_path=None):
     c1, c2, c3 = (M, 1230), (1310, 2490), (2570, W - M)
     # Without a quote the panels use the strip at the bottom too.
     top, bottom = 560, 1880 if day.get('quote') else H - M
-    panel(layer, (c1[0], top, c1[1], 1300))
-    panel(layer, (c1[0], 1350, c1[1], bottom), day.get('todo_title', L['todos']))
+    items = home_items(day.get('home') or {})
+    # The Home bar sits low, partly in the bottom margin, so the columns above lose as little as possible;
+    # the month grid tightens to give the to-do list its rows back.
+    bar = (M, bottom - 100, W - M, bottom + 70) if items and not day.get('quote') else None
+    cal_bottom, todo_top = (1200, 1250) if bar else (1300, 1350)
+    if bar:
+        bottom = bar[1] - 50
+    week = day.get('week') or {}
+    wx_bottom = 960 if week and day.get('weather') else 820
+    panel(layer, (c1[0], top, c1[1], cal_bottom))
+    panel(layer, (c1[0], todo_top, c1[1], bottom), day.get('todo_title', L['todos']))
     panel(layer, (c2[0], M, c2[1], bottom), day.get('today_title', L['today']))
-    panel(layer, (c3[0], M, c3[1], 820))
-    panel(layer, (c3[0], 870, c3[1], bottom), L['tomorrow'])
+    panel(layer, (c3[0], M, c3[1], wx_bottom))
+    panel(layer, (c3[0], wx_bottom + 50, c3[1], bottom), L['tomorrow'])
+    if bar:
+        panel(layer, bar)
     im = Image.alpha_composite(bg, layer)
     d = ImageDraw.Draw(im)
 
     # Date, top left.
     d.text((c1[0] + 10, M - 20), L['weekdays'][date.weekday()], font=font(190, 'Bold'), fill=CREAM)
     d.text((c1[0] + 14, M + 220), L['date'].format(day=date.day, month=L['months'][date.month - 1]), font=font(96, 'Medium'), fill=SOFT)
-    month(d, date, c1[0] + 70, top + 50, c1[1] - c1[0] - 140)
+    month(d, date, c1[0] + 70, top + 50, c1[1] - c1[0] - 140, row=74 if bar else 86)
 
     # To-dos with empty boxes.
-    y = 1505
+    y = todo_top + 155
     if not day.get('todos'):
         d.text((c1[0] + 70, y), L['no_todos'], font=font(70, 'Medium'), fill=DIM)
     todos = day.get('todos', [])
     fits = (bottom - 40 - y) // 125
     if len(todos) > fits:
-        todos = todos[:fits - 1] + [f'… und {len(todos) - fits + 1} weitere']
+        todos = todos[:fits - 1] + [L['more_n'].format(len(todos) - fits + 1)]
     # One size for the whole list, shrunk until the longest item fits inside the panel.
     size, max_w = 80, c1[1] - (c1[0] + 195) - 50
     while size > 52 and any(d.textlength(t, font=font(size, 'Medium')) > max_w for t in todos):
@@ -197,8 +261,26 @@ def render(day, out, background_path=None):
         d.text((c3[0] + 70, M + 380), wx['text'], font=font(66, 'Medium'), fill=CREAM)
         if wx.get('hint'):
             d.text((c3[0] + 70, M + 480), wx['hint'], font=font(66, 'DemiBold'), fill=ORANGE)
+        if week:  # the 7-day outlook from Home Assistant, highlighted past the dashboard's alert levels
+            y = M + 590
+            d.line([(c3[0] + 70, y), (c3[1] - 70, y)], fill=(64, 68, 78), width=3)
+            d.text((c3[0] + 70, y + 26), L['week'], font=font(50, 'Medium'), fill=DIM)
+            parts = [(icon, L[key].format(f"{week[key]:g}"), colour if week.get(key + '_alert') else CREAM)
+                     for key, icon, colour in (('wind', '💨', HEAT), ('rain', '🌧️', COOL)) if key in week]
+            size = 60
+            while size > 44 and sum(80 + d.textlength(t, font=font(size, 'DemiBold')) for _, t, _ in parts) \
+                    + 70 * (len(parts) - 1) > c3[1] - c3[0] - 140:
+                size -= 2
+            x = c3[0] + 70
+            for icon, text, colour in parts:
+                f = font(size, 'DemiBold')
+                emoji(im, icon, x, y + 96, 62)
+                d.text((x + 80, y + 96 + (60 - size) // 2), text, font=f, fill=colour)
+                x += 80 + d.textlength(text, font=f) + 70
 
-    events(d, day.get('tomorrow', []), c3[0] + 70, 1070, c3[1] - c3[0] - 140, bottom - 40, scale=0.82)
+    events(d, day.get('tomorrow', []), c3[0] + 70, wx_bottom + 250, c3[1] - c3[0] - 140, bottom - 40, scale=0.82)
+    if bar:
+        home_bar(im, bar, items)
 
     # Quote along the bottom.
     if day.get('quote'):

@@ -277,7 +277,7 @@ def _read_ha_fields(f, cfg):
     url = f.get('ha_url', '').strip().rstrip('/')
     if url and '://' not in url:
         url = 'http://' + url
-    cfg['home_assistant'] = {'url': url, 'token': f.get('ha_token', '').strip() or cur.get('token', '')}
+    cfg['home_assistant'] = dict(cur, url=url, token=f.get('ha_token', '').strip() or cur.get('token', ''))
 
 
 @app.post('/ha-test')

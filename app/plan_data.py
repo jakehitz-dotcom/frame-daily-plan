@@ -10,6 +10,8 @@ import holidays
 import icalendar
 import recurring_ical_events
 
+import ha
+
 TODO_PREFIXES = ('to-do:', 'todo:', 'task:', 'aufgabe:')
 
 # WMO weather code → emoji, German text, English text
@@ -122,6 +124,54 @@ def weather(cfg, day, w):
     return {'icon': icon, 'max': round(tmax), 'min': round(tmin), 'text': text, 'hint': hint}
 
 
+WIND_ALERT_MPH = 20   # the same thresholds as the alert tiles on the Eastvale dashboard
+RAIN_ALERT_IN = 0.25
+
+
+def _number(st):
+    try:
+        return float(st['state'])
+    except (TypeError, KeyError, ValueError):  # missing, unknown or unavailable: leave it out
+        return None
+
+
+def home(cfg):
+    """Read the Home Assistant entities in one request. Returns (home, week): anything that is
+    missing or unavailable is simply left out, so the plan only shows what it knows."""
+    ents = (cfg.get('home_assistant') or {}).get('entities') or {}
+    snap = ha.snapshot(cfg)
+    get = lambda key: snap.get(ents.get(key) or '')  # noqa: E731
+    out = {}
+    stat = get('thermostat')
+    if stat:
+        a = stat.get('attributes', {})
+        mode = stat.get('state')
+        if mode == 'heat' and a.get('temperature') is not None:
+            out['set'] = {'mode': 'heat', 'temps': [round(a['temperature'])]}
+        elif mode == 'cool' and a.get('temperature') is not None:
+            out['set'] = {'mode': 'cool', 'temps': [round(a['temperature'])]}
+        elif mode == 'heat_cool' and a.get('target_temp_low') is not None and a.get('target_temp_high') is not None:
+            out['set'] = {'mode': 'heat_cool', 'temps': [round(a['target_temp_low']), round(a['target_temp_high'])]}
+        if a.get('current_temperature') is not None:
+            out['inside'] = round(a['current_temperature'])
+    inside = _number(get('indoor_temp'))
+    if inside is not None:
+        out['inside'] = round(inside)
+    tub = _number(get('hot_tub'))
+    if tub is not None:
+        out['hot_tub'] = round(tub)
+    dish = get('dishwasher_clean')
+    if dish and dish.get('state') == 'on':
+        out['dishwasher_clean'] = True
+    week = {}
+    wind, rain = _number(get('wind_7d')), _number(get('rain_7d'))
+    if wind is not None:
+        week['wind'], week['wind_alert'] = round(wind), wind > WIND_ALERT_MPH
+    if rain is not None:
+        week['rain'], week['rain_alert'] = round(rain, 2), rain > RAIN_ALERT_IN
+    return out, week
+
+
 def build(cfg, now):
     tz = zoneinfo.ZoneInfo(cfg['timezone'])
     w = words(cfg)
@@ -160,6 +210,12 @@ def build(cfg, now):
             data['weather'] = weather(cfg, today, w)
         except Exception as e:  # noqa: BLE001  the plan must still appear without weather
             errors.append(f'Weather: {e}')
+    data['home'], data['week'] = {}, {}
+    if ha.configured(cfg):
+        try:
+            data['home'], data['week'] = home(cfg)
+        except Exception as e:  # noqa: BLE001  Home Assistant down: the plan appears without it
+            errors.append(f'Home Assistant: {e}')
     for e in data['today'] + data['tomorrow']:
         e.pop('end_dt', None)
         e.pop('sort', None)
@@ -223,4 +279,5 @@ def demo(cfg, now, lang='en'):
         return out
     return {'date': now.date().isoformat(), 'lang': lang, 'today': entries(d['today'], True),
             'tomorrow': entries(d['tomorrow'], False), 'todos': d['todos'], 'weather': dict(d['weather']),
-            'errors': []}
+            'home': {'inside': 71, 'set': {'mode': 'heat', 'temps': [70]}, 'hot_tub': 101, 'dishwasher_clean': True},
+            'week': {'wind': 24, 'wind_alert': True, 'rain': 0.4, 'rain_alert': True}, 'errors': []}
