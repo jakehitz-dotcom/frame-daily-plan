@@ -196,6 +196,7 @@
     <div class="grid">
       <label for="ha_url">{{ t.ha_url }}</label><input type="text" id="ha_url" name="ha_url" value="{{ cfg.home_assistant.url }}" placeholder="http://192.168.0.x:8123">
       <label for="ha_token">{{ t.ha_token }}</label><input type="password" id="ha_token" name="ha_token" value="" autocomplete="off" placeholder="{{ t.ha_token_saved if cfg.home_assistant.token else '' }}">
+      <label for="ha_todo_lists">{{ t.ha_todo_lists }}</label><div><input type="text" id="ha_todo_lists" name="ha_todo_lists" value="{{ (cfg.home_assistant.todo_lists or [])|join(', ') }}" placeholder="todo.my_tasks, todo.shopping_list"> <span class="hint">{{ t.ha_todo_hint }}</span></div>
       <label></label><div><button formaction="{{ url_for('ha_test') }}">{{ t.btn_ha_test }}</button> <span class="hint">{{ t.ha_hint }}</span></div>
     </div>
   </section>

@@ -283,6 +283,9 @@ def _read_ha_fields(f, cfg):
     if url and '://' not in url:
         url = 'http://' + url
     cfg['home_assistant'] = dict(cur, url=url, token=f.get('ha_token', '').strip() or cur.get('token', ''))
+    if 'ha_todo_lists' in f:
+        cfg['home_assistant']['todo_lists'] = [e.strip() for e in f['ha_todo_lists'].replace(',', ' ').split()
+                                               if e.strip().startswith('todo.')]
 
 
 @app.post('/wake')

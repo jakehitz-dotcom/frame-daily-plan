@@ -220,6 +220,14 @@ def build(cfg, now):
             data['weather'] = weather(cfg, today, w)
         except Exception as e:  # noqa: BLE001  the plan must still appear without weather
             errors.append(f'Weather: {e}')
+    lists = (cfg.get('home_assistant') or {}).get('todo_lists') or []
+    if lists and ha.configured(cfg):
+        try:  # due today, overdue or undated; tasks dated later wait for their day
+            for entity, items in ha.todo_items(lists, cfg).items():
+                data['todos'] = sorted(set(data['todos']) | {i['summary'] for i in items
+                                                             if not i['due'] or i['due'] <= today.isoformat()})
+        except Exception as e:  # noqa: BLE001
+            errors.append(f'To-do lists: {e}')
     data['home'], data['week'] = {}, {}
     if ha.configured(cfg):
         try:

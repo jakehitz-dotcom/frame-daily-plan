@@ -30,7 +30,9 @@ DEFAULTS = {
         'rain_7d': 'input_number.rolling_hills_rain_7_day',
         'last_bottle': 'sensor.finn_bottle',   # Huckleberry: time of the last bottle
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
-    }, 'show_minutes': 30},
+    }, 'show_minutes': 30,
+        'todo_lists': [],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
+    },
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }
 

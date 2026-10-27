@@ -143,3 +143,43 @@ def test_last_bottle_time_and_elapsed(monkeypatch):
     assert 'bottle' not in home                                 # over a day old: stale, not shown
     monkeypatch.setattr(ha, 'snapshot', lambda cfg: _snap(**{'sensor.finn_bottle': {'state': 'unavailable'}}))
     assert 'bottle' not in plan_data.home(cfg, datetime.datetime(2026, 10, 27, 11, 0, tzinfo=la))[0]
+
+
+def test_google_tasks_via_home_assistant(monkeypatch):
+    import datetime
+    import zoneinfo
+    import plan_data
+    seen = {}
+
+    def items(entity_ids, cfg):
+        seen['lists'] = entity_ids
+        return {'todo.my_tasks': [{'summary': 'Renew registration', 'due': '2026-10-20'},   # overdue
+                                  {'summary': 'Call the plumber', 'due': '2026-10-27'},     # today
+                                  {'summary': 'Book flights', 'due': None},                 # undated
+                                  {'summary': 'Plan the party', 'due': '2026-11-03'}]}      # later: waits
+    monkeypatch.setattr(ha, 'todo_items', items)
+    monkeypatch.setattr(ha, 'snapshot', lambda cfg: {})
+    cfg = config.load()
+    cfg['home_assistant'].update(url='http://ha', token='t', todo_lists=['todo.my_tasks'])
+    cfg['weather']['enabled'] = False
+    data = plan_data.build(cfg, datetime.datetime(2026, 10, 27, 8, tzinfo=zoneinfo.ZoneInfo('America/Los_Angeles')))
+    assert seen['lists'] == ['todo.my_tasks']
+    assert data['todos'] == ['Book flights', 'Call the plumber', 'Renew registration']
+
+
+def test_todo_items_reads_the_service_response(monkeypatch):
+    class R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'changed_states': [], 'service_response': {'todo.my_tasks': {'items': [
+                {'summary': 'Book flights', 'uid': '1', 'status': 'needs_action'},
+                {'summary': 'Call the plumber', 'uid': '2', 'status': 'needs_action', 'due': '2026-10-27'}]}}}
+    sent = {}
+    monkeypatch.setattr(ha.requests, 'post', lambda url, **kw: sent.update(url=url, **kw) or R())
+    out = ha.todo_items(['todo.my_tasks'], {'home_assistant': {'url': 'http://ha:8123', 'token': 't'}})
+    assert sent['url'] == 'http://ha:8123/api/services/todo/get_items?return_response'
+    assert sent['json'] == {'entity_id': ['todo.my_tasks'], 'status': 'needs_action'}
+    assert out == {'todo.my_tasks': [{'summary': 'Book flights', 'due': None},
+                                     {'summary': 'Call the plumber', 'due': '2026-10-27'}]}

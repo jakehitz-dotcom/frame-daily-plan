@@ -20,6 +20,10 @@ def configured(cfg=None):
     return bool(url and token)
 
 
+def _headers(token):
+    return {'Authorization': f'Bearer {token}'}
+
+
 def _get(path, cfg=None):
     url, token = settings(cfg)
     if not (url and token):
@@ -41,6 +45,22 @@ def check(cfg=None):
 def state(entity_id, cfg=None):
     """One entity, e.g. state('sensor.outdoor_temperature') → {'state': '18.5', 'attributes': {...}, ...}"""
     return _get(f'states/{entity_id}', cfg)
+
+
+def todo_items(entity_ids, cfg=None):
+    """Open items of Home Assistant to-do lists (Google Tasks, Shopping List, Todoist, ...):
+    {entity_id: [{'summary': ..., 'due': 'YYYY-MM-DD' or None}]}. todo.get_items only reads."""
+    url, token = settings(cfg)
+    if not (url and token):
+        raise RuntimeError('Home Assistant address or token not set')
+    r = requests.post(f'{url}/api/services/todo/get_items?return_response', headers=_headers(token), timeout=TIMEOUT,
+                      json={'entity_id': list(entity_ids), 'status': 'needs_action'})
+    r.raise_for_status()
+    out = {}
+    for entity, body in (r.json().get('service_response') or {}).items():
+        out[entity] = [{'summary': i.get('summary', '').strip(), 'due': (i.get('due') or '')[:10] or None}
+                       for i in body.get('items', []) if i.get('summary', '').strip()]
+    return out
 
 
 def snapshot(cfg=None):
