@@ -135,7 +135,7 @@ def _number(st):
         return None
 
 
-def home(cfg):
+def home(cfg, now=None):
     """Read the Home Assistant entities in one request. Returns (home, week): anything that is
     missing or unavailable is simply left out, so the plan only shows what it knows."""
     ents = (cfg.get('home_assistant') or {}).get('entities') or {}
@@ -160,6 +160,16 @@ def home(cfg):
     tub = _number(get('hot_tub'))
     if tub is not None:
         out['hot_tub'] = round(tub)
+    bottle = get('last_bottle')
+    if bottle and now is not None:
+        try:
+            at = datetime.datetime.fromisoformat(bottle['state']).astimezone(now.tzinfo)
+        except (TypeError, ValueError, KeyError):  # unknown / unavailable
+            at = None
+        mins = (now - at).total_seconds() // 60 if at else -1
+        if 0 <= mins < 24 * 60:  # older than a day means stale data, not a hungry baby
+            out['bottle'] = {'at': at.strftime('%-I:%M %p'), 'ago': f'{int(mins // 60)}h {int(mins % 60)}m'
+                             if mins >= 60 else f'{int(mins)}m'}
     dish = get('dishwasher_clean')
     if dish and dish.get('state') == 'on':
         out['dishwasher_clean'] = True
@@ -213,7 +223,7 @@ def build(cfg, now):
     data['home'], data['week'] = {}, {}
     if ha.configured(cfg):
         try:
-            data['home'], data['week'] = home(cfg)
+            data['home'], data['week'] = home(cfg, now)
         except Exception as e:  # noqa: BLE001  Home Assistant down: the plan appears without it
             errors.append(f'Home Assistant: {e}')
     for e in data['today'] + data['tomorrow']:
@@ -279,5 +289,5 @@ def demo(cfg, now, lang='en'):
         return out
     return {'date': now.date().isoformat(), 'lang': lang, 'today': entries(d['today'], True),
             'tomorrow': entries(d['tomorrow'], False), 'todos': d['todos'], 'weather': dict(d['weather']),
-            'home': {'inside': 71, 'set': {'mode': 'heat', 'temps': [70]}, 'hot_tub': 101, 'dishwasher_clean': True},
+            'home': {'bottle': {'at': '6:45 AM', 'ago': '1h 15m'}, 'inside': 71, 'set': {'mode': 'heat', 'temps': [70]}, 'hot_tub': 101, 'dishwasher_clean': True},
             'week': {'wind': 24, 'wind_alert': True, 'rain': 0.4, 'rain_alert': True}, 'errors': []}

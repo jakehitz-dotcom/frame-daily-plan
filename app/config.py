@@ -28,6 +28,7 @@ DEFAULTS = {
         'dishwasher_clean': 'input_boolean.dishwasher_clean',  # on = cycle finished, door not opened since
         'wind_7d': 'input_number.rolling_hills_max_wind_7_day',
         'rain_7d': 'input_number.rolling_hills_rain_7_day',
+        'last_bottle': 'sensor.finn_bottle',   # Huckleberry: time of the last bottle
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
     }, 'show_minutes': 30},
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background

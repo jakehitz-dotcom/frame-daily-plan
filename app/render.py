@@ -33,7 +33,8 @@ LABELS = {
            'past': 'vorbei', 'night': 'bis {}° in der Nacht', 'all_day': 'Ganztägig',
            'date': '{day}. {month}', 'week': 'Nächste 7 Tage', 'wind': '{} km/h Böen', 'rain': '{} mm Regen',
            'inside': 'Drinnen', 'heat': 'Heizen auf', 'cool': 'Kühlen auf', 'heat_cool': 'Automatik',
-           'hot_tub': 'Whirlpool', 'dishwasher': 'Spülmaschine', 'clean': 'Sauber'},
+           'hot_tub': 'Whirlpool', 'dishwasher': 'Spülmaschine', 'clean': 'Sauber',
+           'bottle': 'Letzte Flasche {}', 'ago': 'vor {}'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
                       'October', 'November', 'December'],
@@ -42,7 +43,8 @@ LABELS = {
            'past': 'done', 'night': 'down to {}° tonight', 'all_day': 'All day',
            'date': '{month} {day}', 'week': 'Next 7 days', 'wind': '{} mph peak', 'rain': '{} in rain',
            'inside': 'Inside', 'heat': 'Heating to', 'cool': 'Cooling to', 'heat_cool': 'Auto',
-           'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean'},
+           'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean',
+           'bottle': 'Last bottle {}', 'ago': '{} ago'},
 }
 L = LABELS['de']  # set per render
 
@@ -72,6 +74,9 @@ def emoji(im, ch, x, y, size):
 def home_items(home):
     """(emoji, label, [(text, colour), ...]) for the Home bar, in reading order."""
     items = []
+    if home.get('bottle'):
+        b = home['bottle']
+        items.append(('🍼', L['bottle'].format(b['at']), [(L['ago'].format(b['ago']), CREAM)]))
     if 'inside' in home:
         items.append(('🏠', L['inside'], [(f"{home['inside']}°", CREAM)]))
     s = home.get('set')
@@ -93,7 +98,12 @@ def home_bar(im, box, items):
     d = ImageDraw.Draw(im)
     x0, y0, x1, y1 = box
     cell = (x1 - x0) / len(items)
-    lf, vf = font(48, 'Medium'), font(88, 'DemiBold')
+    size = 88  # shrink together when many items share the bar, so none crowds its neighbour
+    while size > 60 and any(130 + max(d.textlength(lb, font=font(round(size * 0.55), 'Medium')),
+                                      sum(d.textlength(t, font=font(size, 'DemiBold')) for t, _ in pts)) > cell - 50
+                            for _, lb, pts in items):
+        size -= 4
+    lf, vf = font(round(size * 0.55), 'Medium'), font(size, 'DemiBold')
     for i, (icon, label, parts) in enumerate(items):
         text_w = max(d.textlength(label, font=lf), sum(d.textlength(t, font=vf) for t, _ in parts))
         x = x0 + i * cell + (cell - 130 - text_w) / 2  # each item centred in its share of the bar
@@ -101,7 +111,7 @@ def home_bar(im, box, items):
         d.text((x + 130, y0 + 18), label, font=lf, fill=DIM)
         tx = x + 130
         for text, colour in parts:
-            d.text((tx, y0 + 64), text, font=vf, fill=colour)
+            d.text((tx, y0 + 64 + (88 - size) // 2), text, font=vf, fill=colour)
             tx += d.textlength(text, font=vf)
 
 

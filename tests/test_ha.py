@@ -125,3 +125,21 @@ def test_render_with_and_without_home(tmp_path):
     render.render(d, str(tmp_path / 'with.jpg'))
     render.render(dict(d, home={}, week={}), str(tmp_path / 'without.jpg'))
     assert (tmp_path / 'with.jpg').stat().st_size > 100_000 and (tmp_path / 'without.jpg').stat().st_size > 100_000
+
+
+def test_last_bottle_time_and_elapsed(monkeypatch):
+    import datetime
+    import zoneinfo
+    import plan_data
+    la = zoneinfo.ZoneInfo('America/Los_Angeles')
+    bottle = {'state': '2026-10-27T16:38:53+00:00', 'attributes': {'amount': 170, 'units': 'ml'}}  # Huckleberry, UTC
+    monkeypatch.setattr(ha, 'snapshot', lambda cfg: _snap(**{'sensor.finn_bottle': bottle}))
+    cfg = config.load()
+    home, _ = plan_data.home(cfg, datetime.datetime(2026, 10, 27, 11, 32, 30, tzinfo=la))
+    assert home['bottle'] == {'at': '9:38 AM', 'ago': '1h 53m'}
+    home, _ = plan_data.home(cfg, datetime.datetime(2026, 10, 27, 10, 5, tzinfo=la))
+    assert home['bottle']['ago'] == '26m'
+    home, _ = plan_data.home(cfg, datetime.datetime(2026, 10, 28, 12, 0, tzinfo=la))
+    assert 'bottle' not in home                                 # over a day old: stale, not shown
+    monkeypatch.setattr(ha, 'snapshot', lambda cfg: _snap(**{'sensor.finn_bottle': {'state': 'unavailable'}}))
+    assert 'bottle' not in plan_data.home(cfg, datetime.datetime(2026, 10, 27, 11, 0, tzinfo=la))[0]
