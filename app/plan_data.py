@@ -365,6 +365,11 @@ def build(cfg, now):
             except Exception as e:  # noqa: BLE001
                 errors.append(f'NWS outlook: {e}')
     data['todo_hint'] = cfg.get('todo_hint', '')
+    data['updated'] = now.strftime('%-I:%M %p')
+    clock = cfg.get('clock') or {}
+    if clock.get('enabled', True):  # a few minutes ahead: the image is up to 5 minutes old when you see it
+        data['clock'] = (now + datetime.timedelta(minutes=int(clock.get('ahead_minutes', 3)))).strftime('%H:%M')
+        data['clock_style'], data['clock_opacity'] = clock.get('style', 'ring'), float(clock.get('opacity', 0.28))
     data['banner'], data['countdown'] = banner.for_day(cfg, today)
     lists = (cfg.get('home_assistant') or {}).get('todo_lists') or []
     if lists and ha.configured(cfg):
@@ -463,4 +468,5 @@ def demo(cfg, now, lang='en'):
     return {'date': now.date().isoformat(), 'lang': lang, 'today': entries(d['today'], True),
             'tomorrow': entries(d['tomorrow'], False), 'todos': d['todos'], 'weather': dict(d['weather']),
             'home': {'bottle': {'at': '6:45 AM', 'ago': '1h 15m'}, 'inside': 71, 'set': {'mode': 'heat', 'temps': [70]}, 'hot_tub': 101, 'dishwasher_clean': True},
-            'week': {'wind': 24, 'wind_alert': True, 'rain': 0.4, 'rain_alert': True}, 'errors': []}
+            'week': {'wind': 24, 'wind_alert': True, 'rain': 0.4, 'rain_alert': True}, 'errors': [],
+            'updated': now.strftime('%-I:%M %p'), 'clock': (now + datetime.timedelta(minutes=3)).strftime('%H:%M')}

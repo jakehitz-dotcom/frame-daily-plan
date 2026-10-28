@@ -7,6 +7,7 @@ Fonts are Inter and Noto Color Emoji (both OFL, bundled in fonts/).
 """
 import calendar
 import datetime
+import math
 import os
 import re
 
@@ -36,10 +37,10 @@ LABELS = {
            'inside': 'Drinnen', 'heat': 'Heizen auf', 'cool': 'Kühlen auf', 'heat_cool': 'Automatik',
            'hot_tub': 'Whirlpool', 'dishwasher': 'Spülmaschine', 'clean': 'Sauber',
            'bottle': 'Letzte Flasche {}', 'ago': 'vor {}', 'hilo': 'Hoch {}°  ·  Tief {}°',
-           'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': 'über 4: {}–{}', 'uv_now': 'UV {} jetzt',
+           'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': '{}–{}', 'uv_high': 'Hoher UV: ', 'uv_now': 'UV {} jetzt',
            'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet',
            'xmas_days': 'Tage bis Weihnachten', 'xmas_tomorrow': 'Morgen ist Weihnachten!',
-           'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'at_a_glance': 'Die Woche auf einen Blick',
+           'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'updated_at': 'Aktualisiert um {}', 'at_a_glance': 'Die Woche auf einen Blick',
            'nothing_planned': 'Nichts geplant'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
@@ -51,10 +52,10 @@ LABELS = {
            'inside': 'Inside', 'heat': 'Heating to', 'cool': 'Cooling to', 'heat_cool': 'Auto',
            'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean',
            'bottle': 'Last bottle {}', 'ago': '{} ago', 'hilo': 'High {}°  ·  Low {}°',
-           'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': 'above 4: {}–{}', 'uv_now': 'UV {} now',
+           'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': '{}–{}', 'uv_high': 'High UV: ', 'uv_now': 'UV {} now',
            'quiet': 'Quiet week ahead: no storms or rain expected',
            'xmas_days': 'days until Christmas', 'xmas_tomorrow': 'Christmas is tomorrow!',
-           'week_ahead': 'The week ahead', 'updated': 'updated {}', 'at_a_glance': 'Week at a glance',
+           'week_ahead': 'The week ahead', 'updated': 'updated {}', 'updated_at': 'Updated at {}', 'at_a_glance': 'Week at a glance',
            'nothing_planned': 'Nothing planned'},
 }
 L = LABELS['de']  # set per render
@@ -123,9 +124,9 @@ def weather_panel(im, d, wx, week, x, x1, top):
         if uv.get('now') is not None:
             colour = next(c for floor, c in UV_LEVELS if uv['now'] >= floor)
             head = L['uv_now'].format(uv['now'])
-            tail = f'  ·  {window}' if window else ''
+            tail = f"  ·  {L['uv_high']}{window}" if window else ''
         else:
-            colour, head, tail = ORANGE, 'UV ', window
+            colour, head, tail = ORANGE, L['uv_high'], window
         if draw:
             hf, tf = font(58, 'DemiBold'), font(54, 'Medium')
             d.text((x, y), head, font=hf, fill=colour)
@@ -171,7 +172,7 @@ def weather_panel(im, d, wx, week, x, x1, top):
     return y + 40
 
 
-TODO_FULL, TODO_SMALLEST = 80, 46   # text size of a to-do line, normal and the smallest it shrinks to
+TODO_FULL, TODO_SMALLEST = 60, 46   # text size of a to-do line (five rows fit), and the smallest it shrinks to
 FOOTER = 62                          # the small "(… not shown)" line
 
 
@@ -189,7 +190,7 @@ def hint_lines(d, hint, room):
 
 def todo_row(size):
     """Row height: airy at full size, tighter as the text shrinks for a long list."""
-    return round(size * (1.56 if size >= 70 else 1.38))
+    return round(size * (1.56 if size >= 70 else 1.33))
 
 
 def plan_todos(open_, done, height):
@@ -286,6 +287,44 @@ def home_bar(im, box, items):
         for text, colour in parts:
             d.text((tx, y0 + 64 + (88 - size) // 2), text, font=vf, fill=colour)
             tx += d.textlength(text, font=vf)
+
+
+CLOCK_STYLES = ('ring', 'disc', 'minimal')
+
+
+def clock_icon(size, hh, mm, style='ring', opacity=0.28):
+    """A soft analog clock showing roughly hh:mm. Thick, round-ended hands and only twelve dots,
+    so it gives the time at a glance but not the exact minute. Drawn 4x larger, then scaled down."""
+    k = 4
+    n = size * k
+    ink = Image.new('L', (n, n), 0)          # coverage; colour and transparency are applied at the end
+    d = ImageDraw.Draw(ink)
+    c, r = n / 2, n / 2 - 4 * k
+    if style == 'disc':
+        d.ellipse([c - r, c - r, c + r, c + r], fill=70)
+    elif style == 'ring':
+        d.ellipse([c - r, c - r, c + r, c + r], outline=255, width=round(n * 0.03))
+    for i in range(12):
+        if style == 'minimal' and i % 3:
+            continue
+        a = math.radians(i * 30)
+        big = i % 3 == 0
+        dot = n * (0.036 if big else 0.018)
+        x, y = c + r * 0.8 * math.sin(a), c - r * 0.8 * math.cos(a)
+        d.ellipse([x - dot, y - dot, x + dot, y + dot], fill=255)
+
+    def hand(angle, length, width):
+        a = math.radians(angle)
+        x, y = c + length * math.sin(a), c - length * math.cos(a)
+        d.line([(c, c), (x, y)], fill=255, width=round(width))
+        d.ellipse([x - width / 2, y - width / 2, x + width / 2, y + width / 2], fill=255)  # round end, no point
+    hand((hh % 12) * 30 + mm * 0.5, r * 0.5, n * 0.075)
+    hand(mm * 6, r * 0.74, n * 0.055)
+    d.ellipse([c - n * 0.06, c - n * 0.06, c + n * 0.06, c + n * 0.06], fill=255)
+    ink = ink.resize((size, size), Image.LANCZOS)
+    out = Image.new('RGBA', (size, size), CREAM + (0,))
+    out.putalpha(ink.point(lambda v: round(v * opacity)))
+    return out
 
 
 def wrap(d, text, f, max_w, max_lines=2):
@@ -406,6 +445,11 @@ def render(day, out, background_path=None):
     panel(layer, (c3[0], wx_bottom + 50, c3[1], bottom), L['tomorrow'])
     if bar:
         panel(layer, bar)
+    if day.get('clock'):  # behind the day of the week
+        hh, mm = map(int, day['clock'].split(':'))
+        size = 470  # large enough that the dots and hand tips reach past the letters
+        icon = clock_icon(size, hh, mm, day.get('clock_style', 'ring'), day.get('clock_opacity', 0.28))
+        layer.alpha_composite(icon, (c1[0] + 175 - size // 2, M + 130 - size // 2))
     # Text and icons go on their own transparent layer: combined with the panels by true alpha
     # compositing, the plan can be scaled down under a banner without fringes.
     im = Image.new('RGBA', (W, H), (0, 0, 0, 0))
@@ -421,17 +465,17 @@ def render(day, out, background_path=None):
     if hint:
         lines = hint_lines(d, hint, c1[1] - c1[0] - 140 - d.textlength(day.get('todo_title', L['todos']),
                                                                      font=font(86, 'DemiBold')) - 50)
-        size = 40
+        size = 36
         room = c1[1] - 70 - (c1[0] + 70 + d.textlength(day.get('todo_title', L['todos']), font=font(86, 'DemiBold')) + 50)
         while size > 28 and max(d.textlength(t, font=font(size, 'Medium')) for t in lines) > room:
             size -= 2
         y = todo_top + 48 + (2 - len(lines)) * size // 2
         for t in lines:
             d.text((c1[1] - 70, y), t, font=font(size, 'Medium'), fill=DIM, anchor='ra')
-            y += round(size * 1.25)
+            y += round(size * 1.2)
 
     # To-dos: open ones first (empty boxes), then today's completed ones (ticked, struck through).
-    todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 155, bottom - 40)
+    todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 135, bottom - 40)
 
     events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40)
 
@@ -451,6 +495,9 @@ def render(day, out, background_path=None):
         final = with_banner(bg, content, day.get('banner'), day.get('countdown'))
     else:
         final = Image.alpha_composite(bg, content)
+    if day.get('updated'):  # barely there, at the very edge
+        ImageDraw.Draw(final).text((26, H - 20), L['updated_at'].format(day['updated']), font=font(32, 'Medium'),
+                                   fill=(112, 115, 122), anchor='ls')
     final.convert('RGB').save(out, quality=90)
 
 

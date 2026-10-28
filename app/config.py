@@ -45,6 +45,8 @@ DEFAULTS = {
     'greetings': True,             # birthdays and American holiday greetings
     'christmas_countdown': True,   # Dec 1-24
     # beside the To do title, '|' between its two lines; '' = none
+    # Analog clock behind the day of the week; style: ring, disc or minimal
+    'clock': {'enabled': True, 'style': 'ring', 'opacity': 0.28, 'ahead_minutes': 3},
     'todo_hint': 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete',
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }

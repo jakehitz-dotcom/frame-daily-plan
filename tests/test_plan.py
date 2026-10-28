@@ -227,18 +227,18 @@ def test_show_for_wakes_a_sleeping_tv(monkeypatch):
 def test_todo_overflow_rules():
     import render
     render.L = render.LABELS['en']
-    row = round(render.TODO_FULL * 1.56)
-    three = 385                                                          # the real panel: three full rows
-    o = lambda n: [f'open {i}' for i in range(n)]
-    c = lambda n: [f'done {i}' for i in range(n)]
-    assert render.plan_todos(o(2), c(1), three) == (80, o(2), c(1), None)             # 1. all fit
-    assert render.plan_todos(o(2), c(3), three) == (80, o(2), [], '(3 additional completed tasks)')  # 2. no spare row
-    assert render.plan_todos([], c(5), three) == (80, [], c(2), '(3 additional completed tasks)')   # latest shown
-    assert render.plan_todos(o(1), c(4), three) == (80, o(1), c(1), '(3 additional completed tasks)')
-    size, shown, done, foot = render.plan_todos(o(5), [], three)                     # 3. shrink to fit
-    assert render.TODO_SMALLEST <= size < 80 and shown == o(5) and foot is None
-    size, shown, done, foot = render.plan_todos(o(12), c(2), three)                  # 4. smallest + count
+    five = 405                                                           # the real panel: five full rows
+    o = lambda n: [f'open {i}' for i in range(n)]  # noqa: E731
+    c = lambda n: [f'done {i}' for i in range(n)]  # noqa: E731
+    assert render.TODO_FULL == 60 and 5 * render.todo_row(60) <= five
+    assert render.plan_todos(o(3), c(2), five) == (60, o(3), c(2), None)                      # 1. all fit
+    assert render.plan_todos(o(3), c(4), five) == (60, o(3), c(1), '(3 additional completed tasks)')  # 2.
+    assert render.plan_todos([], c(7), five) == (60, [], c(4), '(3 additional completed tasks)')     # latest
+    size, shown, done, foot = render.plan_todos(o(6), [], five)                              # 3. shrink
+    assert render.TODO_SMALLEST <= size < 60 and shown == o(6) and foot is None
+    size, shown, done, foot = render.plan_todos(o(12), c(2), five)                           # 4. count
     assert size == render.TODO_SMALLEST and foot == f'({12 - len(shown)} more to do · 2 completed not shown)'
+
 
 
 def test_hide_while_asleep_restores_on_wake_even_inside_the_window(monkeypatch):
@@ -306,3 +306,17 @@ def test_todo_hint_always_two_lines_when_it_has_two_parts():
         'Alexa, add [task] to my to-do list.', 'Alexa, mark [task] as complete']
     long = 'Say add followed by the task to put it on the list, or mark it done in the app when finished'
     assert len(render.hint_lines(d, long, 650)) == 2
+
+
+def test_clock_three_minutes_ahead_and_updated_stamp(tmp_path):
+    import zoneinfo
+    import render
+    cfg = dict(CFG, calendars=[], weather={'enabled': False}, home_assistant={'url': '', 'token': ''})
+    data = plan_data.build(cfg, datetime.datetime(2026, 10, 28, 11, 31, tzinfo=zoneinfo.ZoneInfo('Europe/London')))
+    assert data['clock'] == '11:34' and data['updated'] == '11:31 AM'
+    off = plan_data.build(dict(cfg, clock={'enabled': False}), datetime.datetime(2026, 10, 28, 11, 31,
+                                                                              tzinfo=zoneinfo.ZoneInfo('Europe/London')))
+    assert 'clock' not in off
+    for style in render.CLOCK_STYLES:
+        icon = render.clock_icon(200, 11, 34, style)
+        assert icon.size == (200, 200) and 0 < icon.getextrema()[3][1] <= round(255 * 0.28) + 1  # see-through
