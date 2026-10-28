@@ -227,26 +227,24 @@ def local_weather(cfg, data, now, tz, w):
 
 
 AHEAD = datetime.timedelta(hours=6)
+UV_WINDOW = 4   # the hours above this UV index are shown
 
 
 def ahead(cfg, wx, grid, now, to_f):
-    """The UV still to come today (the line goes away below 1, e.g. after sunset) and what to wear
-    for the next six hours, as if heading out now."""
+    """UV now (hidden below 1) and today's hours above UV 4 (until they have passed), and what to
+    wear for the next six hours, as if heading out now."""
     hours = []
     for x in wx.pop('hours', None) or []:
         start = datetime.datetime.fromisoformat(x['t']).replace(tzinfo=now.tzinfo)
         hours.append((start, x))
     current_hour = now.replace(minute=0, second=0, microsecond=0)
-    rest_today = [x for s, x in hours if s >= current_hour and s.date() == now.date()]
-    uv_rest = max([x['uv'] for x in rest_today] or [0])
-    if not hours:
-        pass  # no hourly data: keep the day's UV as it was
-    elif uv_rest < 1:
-        wx['uv'] = None
-    else:
-        high = [int(x['t'][11:13]) for x in rest_today if x['uv'] >= 6]
-        wx['uv'] = {'max': round(uv_rest), 'from': _hour(high[0]) if high else None,
-                    'to': _hour(high[-1] + 1) if high else None}
+    if hours:
+        uv_now = next((x['uv'] for s, x in hours if s == current_hour), 0)
+        high = [s for s, x in hours if s.date() == now.date() and x['uv'] > UV_WINDOW]
+        ended = not high or high[-1] + datetime.timedelta(hours=1) <= now
+        uv = {'now': round(uv_now) if uv_now >= 1 else None,
+              'from': None if ended else _hour(high[0].hour), 'to': None if ended else _hour(high[-1].hour + 1)}
+        wx['uv'] = uv if uv['now'] is not None or uv['from'] else None
     window = [(s, x) for s, x in hours if current_hour <= s < now + AHEAD]
     temps = list(grid.get('next') or [])                       # (start, °F) from the NWS grid cell
     if not temps:
@@ -442,7 +440,7 @@ DEMO = {
                      ('19:00', None, 'Board game night', 'green')],
         'todos': ['Learn English vocabulary', 'Practise maths', 'Tidy up your room'],
         'weather': {'icon': '⛅', 'now': 66, 'max': 73, 'min': 56, 'text': 'Partly cloudy now', 'rain': 10,
-                    'uv': {'max': 7, 'from': '11 AM', 'to': '3 PM'},
+                    'uv': {'now': 3, 'from': '11 AM', 'to': '2 PM'},
                     'hint': 'Long sleeves + jacket AM/PM · sunscreen',
                     'outlook': 'Rain likely Sat night–Sun (70%) · Windy Tue'},
     },

@@ -36,7 +36,7 @@ LABELS = {
            'inside': 'Drinnen', 'heat': 'Heizen auf', 'cool': 'Kühlen auf', 'heat_cool': 'Automatik',
            'hot_tub': 'Whirlpool', 'dishwasher': 'Spülmaschine', 'clean': 'Sauber',
            'bottle': 'Letzte Flasche {}', 'ago': 'vor {}', 'hilo': 'Hoch {}°  ·  Tief {}°',
-           'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': '6+ {}–{}',
+           'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': 'über 4: {}–{}', 'uv_now': 'UV {} jetzt',
            'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet',
            'xmas_days': 'Tage bis Weihnachten', 'xmas_tomorrow': 'Morgen ist Weihnachten!',
            'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'at_a_glance': 'Die Woche auf einen Blick',
@@ -51,7 +51,7 @@ LABELS = {
            'inside': 'Inside', 'heat': 'Heating to', 'cool': 'Cooling to', 'heat_cool': 'Auto',
            'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean',
            'bottle': 'Last bottle {}', 'ago': '{} ago', 'hilo': 'High {}°  ·  Low {}°',
-           'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': '6+ {}–{}',
+           'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': 'above 4: {}–{}', 'uv_now': 'UV {} now',
            'quiet': 'Quiet week ahead: no storms or rain expected',
            'xmas_days': 'days until Christmas', 'xmas_tomorrow': 'Christmas is tomorrow!',
            'week_ahead': 'The week ahead', 'updated': 'updated {}', 'at_a_glance': 'Week at a glance',
@@ -118,11 +118,14 @@ def weather_panel(im, d, wx, week, x, x1, top):
         d.text((x, y), lines[0], font=font(size, 'Medium'), fill=CREAM)
     y += 88
     uv = wx.get('uv') or {}
-    if uv.get('max') is not None:
-        colour = next(c for floor, c in UV_LEVELS if uv['max'] >= floor)
-        head = f"UV {uv['max']}"
-        tail = f"  {L['uv_names'][next(i for i, (floor, _) in enumerate(UV_LEVELS) if uv['max'] >= floor)]}" + \
-            (f" · {L['uv_window'].format(uv['from'], uv['to'])}" if uv.get('from') else '')
+    if uv.get('now') is not None or uv.get('from'):  # UV now, and today's hours above 4
+        window = L['uv_window'].format(uv['from'], uv['to']) if uv.get('from') else ''
+        if uv.get('now') is not None:
+            colour = next(c for floor, c in UV_LEVELS if uv['now'] >= floor)
+            head = L['uv_now'].format(uv['now'])
+            tail = f'  ·  {window}' if window else ''
+        else:
+            colour, head, tail = ORANGE, 'UV ', window
         if draw:
             hf, tf = font(58, 'DemiBold'), font(54, 'Medium')
             d.text((x, y), head, font=hf, fill=colour)

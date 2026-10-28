@@ -198,7 +198,7 @@ def test_morning_uv_still_to_come_and_dress_for_the_day_ahead():
     at8 = datetime.datetime(2026, 10, 27, 8, 0, tzinfo=LA)
     wx = {'max': 74, 'min': 56, 'now': 57, 'rain': 0, 'uv': {'max': 5}, 'hours': evening_hours()}
     plan_data.ahead(cfg, wx, {}, at8, lambda t: t)                    # no grid: Open-Meteo hours
-    assert wx['uv'] == {'max': 5, 'from': None, 'to': None}
+    assert wx['uv'] == {'now': None, 'from': '1 PM', 'to': '2 PM'}        # 8 AM: 0 now, window ahead
     assert wx['hint'] == 'Long sleeves or a light layer'              # 57 at 8 AM, 69 by 1 PM
 
 
@@ -207,4 +207,22 @@ def test_late_afternoon_uv_counts_only_the_remaining_hours():
     at4 = datetime.datetime(2026, 10, 27, 16, 0, tzinfo=LA)
     wx = {'max': 74, 'min': 56, 'now': 70, 'rain': 0, 'uv': {'max': 5}, 'hours': evening_hours()}
     plan_data.ahead(cfg, wx, {}, at4, lambda t: t)
-    assert wx['uv']['max'] == 2                                        # 5 was at 1 PM; 2 is what's left
+    assert wx['uv'] == {'now': 2, 'from': None, 'to': None}            # window over: just UV now
+
+
+def test_2am_shows_only_todays_window_above_4():
+    at2 = datetime.datetime(2026, 10, 27, 2, 0, tzinfo=LA)
+    wx = {'max': 74, 'min': 56, 'now': 55, 'rain': 0, 'uv': {'max': 5}, 'hours': evening_hours()}
+    plan_data.ahead({'plan_lang': 'en'}, wx, {}, at2, lambda t: t)
+    assert wx['uv'] == {'now': None, 'from': '1 PM', 'to': '2 PM'}   # no "UV 5" at 2 AM
+
+
+def test_uv_line_text():
+    import render
+    from PIL import Image, ImageDraw
+    render.L = render.LABELS['en']
+    d = ImageDraw.Draw(Image.new('RGB', (8, 8)))
+    base = {'icon': '☀️', 'max': 74, 'min': 56, 'text': 'Sunny now', 'hint': ''}
+    tall = lambda uv: render.weather_panel(None, d, dict(base, uv=uv), {}, 0, 1000, 0)  # noqa: E731
+    assert tall({'now': 3, 'from': '11 AM', 'to': '2 PM'}) == tall({'now': None, 'from': '11 AM', 'to': '2 PM'})
+    assert tall(None) == tall({'now': None, 'from': None, 'to': None}) < tall({'now': 2, 'from': None, 'to': None})
