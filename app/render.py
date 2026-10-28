@@ -172,7 +172,7 @@ def weather_panel(im, d, wx, week, x, x1, top):
     return y + 40
 
 
-TODO_FULL, TODO_SMALLEST = 60, 46   # text size of a to-do line (five rows fit), and the smallest it shrinks to
+TODO_FULL, TODO_SMALLEST = 56, 46   # text size of a to-do line (five rows fit), and the smallest it shrinks to
 FOOTER = 62                          # the small "(… not shown)" line
 
 
@@ -475,7 +475,7 @@ def render(day, out, background_path=None):
             y += round(size * 1.2)
 
     # To-dos: open ones first (empty boxes), then today's completed ones (ticked, struck through).
-    todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 135, bottom - 40)
+    todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 160, bottom - 40)
 
     events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40)
 

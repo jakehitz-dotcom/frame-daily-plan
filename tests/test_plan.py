@@ -227,15 +227,15 @@ def test_show_for_wakes_a_sleeping_tv(monkeypatch):
 def test_todo_overflow_rules():
     import render
     render.L = render.LABELS['en']
-    five = 405                                                           # the real panel: five full rows
+    five = 380                                                           # the real panel: five full rows
     o = lambda n: [f'open {i}' for i in range(n)]  # noqa: E731
     c = lambda n: [f'done {i}' for i in range(n)]  # noqa: E731
-    assert render.TODO_FULL == 60 and 5 * render.todo_row(60) <= five
-    assert render.plan_todos(o(3), c(2), five) == (60, o(3), c(2), None)                      # 1. all fit
-    assert render.plan_todos(o(3), c(4), five) == (60, o(3), c(1), '(3 additional completed tasks)')  # 2.
-    assert render.plan_todos([], c(7), five) == (60, [], c(4), '(3 additional completed tasks)')     # latest
+    assert render.TODO_FULL == 56 and 5 * render.todo_row(56) <= five
+    assert render.plan_todos(o(3), c(2), five) == (56, o(3), c(2), None)                      # 1. all fit
+    assert render.plan_todos(o(3), c(4), five) == (56, o(3), c(1), '(3 additional completed tasks)')  # 2.
+    assert render.plan_todos([], c(7), five) == (56, [], c(4), '(3 additional completed tasks)')     # latest
     size, shown, done, foot = render.plan_todos(o(6), [], five)                              # 3. shrink
-    assert render.TODO_SMALLEST <= size < 60 and shown == o(6) and foot is None
+    assert render.TODO_SMALLEST <= size < 56 and shown == o(6) and foot is None
     size, shown, done, foot = render.plan_todos(o(12), c(2), five)                           # 4. count
     assert size == render.TODO_SMALLEST and foot == f'({12 - len(shown)} more to do · 2 completed not shown)'
 
