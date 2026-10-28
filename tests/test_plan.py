@@ -232,8 +232,9 @@ def test_todo_overflow_rules():
     o = lambda n: [f'open {i}' for i in range(n)]
     c = lambda n: [f'done {i}' for i in range(n)]
     assert render.plan_todos(o(2), c(1), three) == (80, o(2), c(1), None)             # 1. all fit
-    assert render.plan_todos(o(2), c(3), three) == (80, o(2), [], '(3 additional completed tasks)')  # 2.
-    assert render.plan_todos(o(3), c(1), three)[3] == '(1 additional completed task)'
+    assert render.plan_todos(o(2), c(3), three) == (80, o(2), [], '(3 additional completed tasks)')  # 2. no spare row
+    assert render.plan_todos([], c(5), three) == (80, [], c(2), '(3 additional completed tasks)')   # latest shown
+    assert render.plan_todos(o(1), c(4), three) == (80, o(1), c(1), '(3 additional completed tasks)')
     size, shown, done, foot = render.plan_todos(o(5), [], three)                     # 3. shrink to fit
     assert render.TODO_SMALLEST <= size < 80 and shown == o(5) and foot is None
     size, shown, done, foot = render.plan_todos(o(12), c(2), three)                  # 4. smallest + count

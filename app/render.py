@@ -201,8 +201,11 @@ def plan_todos(open_, done, height):
     while size > TODO_SMALLEST and len(open_) * row(size) > room:
         size -= 2
     if len(open_) * row(size) <= room:
-        footer = L['done_hidden'].format(len(done), L['task'] if len(done) == 1 else L['tasks']) if done else None
-        return size, open_, [], footer
+        # Rows left over after the open tasks go to the most recently completed ones; the rest are counted.
+        shown = done[:max(0, room // row(size) - len(open_))]
+        hidden = len(done) - len(shown)
+        footer = L['done_hidden'].format(hidden, L['task'] if hidden == 1 else L['tasks']) if hidden else None
+        return size, open_, shown, footer
     fits = max(1, (height - FOOTER) // row(TODO_SMALLEST))
     footer = L['open_hidden'].format(len(open_) - fits, L['and_done'].format(len(done)) if done else '')
     return TODO_SMALLEST, open_[:fits], [], footer

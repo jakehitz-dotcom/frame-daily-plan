@@ -119,7 +119,9 @@ def test_grid_cell_now_high_low_agree(monkeypatch):
     fake_point(monkeypatch, grid())
     at = datetime.datetime(2026, 10, 27, 14, 30, tzinfo=LA)                   # 21:30 UTC
     g = nws.local(33.77, -118.36, at, LA)
-    assert g == {'now_f': 75, 'hi_f': 76, 'lo_f': 56, 'pop': 20, 'text': 'Sunny', 'icon': '☀️'}
+    assert {k: g[k] for k in ('now_f', 'hi_f', 'lo_f', 'pop', 'text', 'icon')} == {
+        'now_f': 75, 'hi_f': 76, 'lo_f': 56, 'pop': 20, 'text': 'Sunny', 'icon': '☀️'}
+    assert g['next'][0][1] == 75 and min(t for _, t in g['next']) == 65 and g['pop_next'] == 20
     assert g['lo_f'] <= g['now_f'] <= g['hi_f']
 
 
@@ -133,7 +135,8 @@ def test_weather_panel_is_local_and_consistent(monkeypatch):
     wx = data['weather']
     assert (wx['now'], wx['max'], wx['min'], wx['source']) == (77, 77, 56, 'grid')     # high lifted to now
     assert wx['text'] == 'Sunny now' and wx['icon'] == '☀️'
-    assert wx['hint'] == 'T-shirt + light jacket AM/PM · sunscreen'
+    assert wx['hint'] == 'T-shirt weather'          # 2:30 PM: the next six hours stay 65°+
+    assert wx['uv'] == {'max': 7}                 # no hourly data: the day's UV stays
 
 
 def test_outdoor_sensor_wins_for_now(monkeypatch):
@@ -166,3 +169,42 @@ def test_today_high_from_periods(monkeypatch):
     monkeypatch.setattr(nws, 'periods', lambda lat, lon: WEEK)
     assert nws.today_high(33.77, -118.36, datetime.date(2026, 10, 27), LA) == 73
     assert nws.today_high(33.77, -118.36, datetime.date(2026, 10, 28), LA) == 72
+
+
+def evening_hours():
+    """Open-Meteo hours for Oct 27-28: UV peaks at 5 around 1 PM; it cools from 64 at 7 PM to 56 by 1 AM."""
+    rows = []
+    for d, h in [(27, h) for h in range(24)] + [(28, h) for h in range(6)]:
+        uv = max(0, 5 - abs(13 - h)) if d == 27 else 0
+        temp_f = 70 - abs(14 - h) * 1.2 if d == 27 else 56
+        rows.append({'t': f'2026-10-{d}T{h:02d}:00', 'uv': uv, 'temp_f': temp_f, 'pop': 0})
+    return rows
+
+
+def test_evening_no_uv_and_dress_for_the_cooling_hours():
+    cfg = {'plan_lang': 'en'}
+    at7pm = datetime.datetime(2026, 10, 27, 19, 0, tzinfo=LA)
+    wx = {'max': 74, 'min': 56, 'now': 64, 'rain': 0, 'uv': {'max': 5}, 'hours': evening_hours()}
+    grid = {'next': [(at7pm, 64), (at7pm + datetime.timedelta(hours=2), 60), (at7pm + datetime.timedelta(hours=5), 55)],
+            'pop_next': 0}
+    plan_data.ahead(cfg, wx, grid, at7pm, lambda t: t)
+    assert wx['uv'] is None                                            # sun is down: no UV line at all
+    assert wx['hint'] == 'Long sleeves + jacket later'               # not "T-shirt weather"
+    assert 'hours' not in wx
+
+
+def test_morning_uv_still_to_come_and_dress_for_the_day_ahead():
+    cfg = {'plan_lang': 'en'}
+    at8 = datetime.datetime(2026, 10, 27, 8, 0, tzinfo=LA)
+    wx = {'max': 74, 'min': 56, 'now': 57, 'rain': 0, 'uv': {'max': 5}, 'hours': evening_hours()}
+    plan_data.ahead(cfg, wx, {}, at8, lambda t: t)                    # no grid: Open-Meteo hours
+    assert wx['uv'] == {'max': 5, 'from': None, 'to': None}
+    assert wx['hint'] == 'Long sleeves or a light layer'              # 57 at 8 AM, 69 by 1 PM
+
+
+def test_late_afternoon_uv_counts_only_the_remaining_hours():
+    cfg = {'plan_lang': 'en'}
+    at4 = datetime.datetime(2026, 10, 27, 16, 0, tzinfo=LA)
+    wx = {'max': 74, 'min': 56, 'now': 70, 'rain': 0, 'uv': {'max': 5}, 'hours': evening_hours()}
+    plan_data.ahead(cfg, wx, {}, at4, lambda t: t)
+    assert wx['uv']['max'] == 2                                        # 5 was at 1 PM; 2 is what's left

@@ -101,8 +101,9 @@ def holiday_entries(cfg, day, w):
             for n in cal.get(day).split(';')]
 
 
-def dress(hi_f, lo_f, rain_pct, uv_max, lang='en'):
-    """What to wear, from the day's high/low (°F), rain chance and UV: one short line."""
+def dress(hi_f, lo_f, rain_pct, uv_max, lang='en', cool='AM/PM'):
+    """What to wear for the hours ahead: their warmest/coolest (°F), rain chance and UV. cool says when
+    the cool part is ('later' in the evening, 'this morning' early on). One short line."""
     if lang == 'de':
         base = ('Kurze Hose und T-Shirt' if hi_f >= 80 else 'T-Shirt-Wetter' if hi_f >= 72 else 'Langarm oder leichte Schicht'
                 if hi_f >= 64 else 'Pulli oder leichte Jacke' if hi_f >= 55 else 'Warme Jacke' if hi_f >= 45 else 'Wintermantel')
@@ -114,9 +115,9 @@ def dress(hi_f, lo_f, rain_pct, uv_max, lang='en'):
     elif hi_f >= 80:
         base = 'Shorts & T-shirt'
     elif hi_f >= 72:
-        base = 'T-shirt' + (' + light jacket AM/PM' if lo_f < 58 else ' weather')
+        base = 'T-shirt' + (f' + light jacket {cool}' if lo_f < 58 else ' weather')
     elif hi_f >= 64:
-        base = 'Long sleeves' + (' + jacket AM/PM' if lo_f < 55 else ' or a light layer')
+        base = 'Long sleeves' + (f' + jacket {cool}' if lo_f <= 55 else ' or a light layer')
     elif hi_f >= 55:
         base = 'Sweater or light jacket'
     elif hi_f >= 45:
@@ -138,13 +139,19 @@ def weather(cfg, day, w):
     url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode({
         'latitude': loc['lat'], 'longitude': loc['lon'], 'timezone': cfg['timezone'],
         'daily': 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max',
-        'hourly': 'uv_index', 'start_date': day.isoformat(), 'end_date': day.isoformat()})
+        'hourly': 'uv_index,temperature_2m,precipitation_probability', 'start_date': day.isoformat(),
+        'end_date': (day + datetime.timedelta(days=1)).isoformat()})
     body = json.load(urllib.request.urlopen(url, timeout=20))
     d = body['daily']
     code, tmax, tmin = d['weather_code'][0], d['temperature_2m_max'][0], d['temperature_2m_min'][0]
     rain = d['precipitation_probability_max'][0] or 0
-    uv_hours = [int(t[11:13]) for t, v in zip(body['hourly']['time'], body['hourly']['uv_index']) if (v or 0) >= 6]
-    uv_max = max((d.get('uv_index_max') or [0])[0] or 0, max(body['hourly']['uv_index'] or [0], key=lambda v: v or 0) or 0)
+    h = body['hourly']
+    hours = [{'t': t, 'uv': uv or 0, 'temp_f': None if c is None else c * 9 / 5 + 32, 'pop': p or 0}
+             for t, uv, c, p in zip(h['time'], h['uv_index'], h.get('temperature_2m') or [None] * len(h['time']),
+                                    h.get('precipitation_probability') or [0] * len(h['time']))]
+    today_hours = [x for x in hours if x['t'][:10] == day.isoformat()]
+    uv_hours = [int(x['t'][11:13]) for x in today_hours if x['uv'] >= 6]
+    uv_max = max([(d.get('uv_index_max') or [0])[0] or 0] + [x['uv'] for x in today_hours])
     entry = WEATHER_CODES.get(code)
     icon, text = (entry[0], entry[1 if cfg.get('plan_lang') == 'de' else 2]) if entry else ('⛅', w['changeable'])
     hi_f, lo_f = tmax * 9 / 5 + 32, tmin * 9 / 5 + 32
@@ -153,7 +160,7 @@ def weather(cfg, day, w):
     return {'icon': icon, 'max': round(tmax), 'min': round(tmin), 'text': text, 'rain': rain,
             'uv': {'max': round(uv_max), 'from': _hour(uv_hours[0]) if uv_hours else None,
                    'to': _hour(uv_hours[-1] + 1) if uv_hours else None},
-            'hint': dress(hi_f, lo_f, rain, uv_max, cfg.get('plan_lang', 'en'))}
+            'hint': dress(hi_f, lo_f, rain, uv_max, cfg.get('plan_lang', 'en')), 'hours': hours}
 
 
 def sky_now(cfg, data, w):
@@ -216,8 +223,45 @@ def local_weather(cfg, data, now, tz, w):
     rain = wx.get('rain') or 0
     if 30 <= rain < 50:
         wx['text'] = wx['text'].split(', ')[0] + f", {rain}% {w['rain']}"
-    wx['hint'] = dress(to_f(wx['max']), to_f(wx['min']), rain, (wx.get('uv') or {}).get('max') or 0,
-                       cfg.get('plan_lang', 'en'))
+    ahead(cfg, wx, grid, now, to_f)
+
+
+AHEAD = datetime.timedelta(hours=6)
+
+
+def ahead(cfg, wx, grid, now, to_f):
+    """The UV still to come today (the line goes away below 1, e.g. after sunset) and what to wear
+    for the next six hours, as if heading out now."""
+    hours = []
+    for x in wx.pop('hours', None) or []:
+        start = datetime.datetime.fromisoformat(x['t']).replace(tzinfo=now.tzinfo)
+        hours.append((start, x))
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    rest_today = [x for s, x in hours if s >= current_hour and s.date() == now.date()]
+    uv_rest = max([x['uv'] for x in rest_today] or [0])
+    if not hours:
+        pass  # no hourly data: keep the day's UV as it was
+    elif uv_rest < 1:
+        wx['uv'] = None
+    else:
+        high = [int(x['t'][11:13]) for x in rest_today if x['uv'] >= 6]
+        wx['uv'] = {'max': round(uv_rest), 'from': _hour(high[0]) if high else None,
+                    'to': _hour(high[-1] + 1) if high else None}
+    window = [(s, x) for s, x in hours if current_hour <= s < now + AHEAD]
+    temps = list(grid.get('next') or [])                       # (start, °F) from the NWS grid cell
+    if not temps:
+        temps = [(s, x['temp_f']) for s, x in window if x['temp_f'] is not None]
+    if wx.get('now') is not None:
+        temps.insert(0, (now, to_f(wx['now'])))
+    pops = [grid['pop_next']] if grid.get('pop_next') is not None else [x['pop'] for _, x in window]
+    uv_ahead = max([x['uv'] for _, x in window] or [0])
+    if not temps:  # nothing hourly at all: the day's numbers
+        wx['hint'] = dress(to_f(wx['max']), to_f(wx['min']), wx.get('rain') or 0, uv_ahead, cfg.get('plan_lang', 'en'))
+        return
+    warm = max(temps, key=lambda t: t[1])
+    cool = min(temps, key=lambda t: t[1])
+    when = 'later' if cool[0] > warm[0] else ('this morning' if now.hour < 12 else 'now')
+    wx['hint'] = dress(warm[1], cool[1], max(pops or [0]), uv_ahead, cfg.get('plan_lang', 'en'), when)
 
 
 WIND_ALERT_MPH = 20   # the same thresholds as the alert tiles on the Eastvale dashboard

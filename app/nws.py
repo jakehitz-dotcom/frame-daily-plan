@@ -75,6 +75,10 @@ def local(lat, lon, now, tz):
             if e.date() == today or s.date() == today and s.hour < 6]
     pops = [v for s, e, v in _intervals((grid.get('probabilityOfPrecipitation') or {}).get('values'), tz)
             if s.date() == today and e > now]
+    soon = now + datetime.timedelta(hours=6)
+    next_temps = [(max(s, now), round(_c_to_f(v))) for s, e, v in temps if e > now and s < soon]
+    pop_next = [v for s, e, v in _intervals((grid.get('probabilityOfPrecipitation') or {}).get('values'), tz)
+                if e > now and s < soon]
     hi = max(todays + highs) if todays or highs else None
     lo = min(todays + lows) if todays or lows else None
     text = icon = None
@@ -91,7 +95,7 @@ def local(lat, lon, now, tz):
         pass
     f = lambda c: None if c is None else round(_c_to_f(c))  # noqa: E731
     return {'now_f': f(current), 'hi_f': f(hi), 'lo_f': f(lo), 'pop': round(max(pops)) if pops else None,
-            'text': text, 'icon': icon}
+            'text': text, 'icon': icon, 'next': next_temps, 'pop_next': round(max(pop_next)) if pop_next else None}
 
 
 def sky_icon(text, night=False):
