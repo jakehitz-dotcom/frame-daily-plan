@@ -109,6 +109,19 @@
   </section>
 
   <section class="card">
+    <h2>{{ t.recipe }}</h2>
+    <p class="hint">{{ t.recipe_hint }}</p>
+    <form method="post" action="{{ url_for('show_recipe') }}">
+      <textarea name="recipe_text" rows="4" style="width:100%;font:inherit;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)" placeholder="{{ t.recipe_ph }}" required></textarea>
+      <div class="row" style="margin-top:10px">
+        {{ t.recipe_for }} <input type="number" name="minutes" min="5" max="480" value="{{ (cfg.recipe or {}).get('minutes', 60) }}" style="width:90px"> {{ t.minutes }}
+        <button class="primary" name="action" value="show">{{ t.btn_recipe }}</button>
+        <button name="action" value="preview">{{ t.btn_preview }}</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
     <h2>{{ t.banner }}</h2>
     <p class="hint">{{ t.banner_hint }}</p>
     <form method="post" action="{{ url_for('set_banner') }}">

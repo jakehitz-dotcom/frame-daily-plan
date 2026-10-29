@@ -714,3 +714,176 @@ def render_week(week, out, background_path=None):
             line = lines[0] if lines[0] == text else lines[0].rstrip(' ,·') + '…'
             d.text((cx + 76, cy + (48 - size) // 2), line, font=font(size, 'Medium'), fill=SOFT)
     Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=90)
+
+
+# ── A recipe shared from Paprika, full screen ──────────────────────────────────────────────────
+def _rich_lines(d, tokens, width, size):
+    """Greedy word wrap of [(word, bold)] at one size; returns lines of [(word, bold)]."""
+    fonts = {False: font(size, 'Medium'), True: font(size, 'DemiBold')}
+    space = d.textlength(' ', font=fonts[False])
+    lines, line, x = [], [], 0.0
+    for word, bold in tokens:
+        w = d.textlength(word, font=fonts[bold])
+        if line and x + space + w > width:
+            lines.append(line)
+            line, x = [], 0.0
+        x += (space if line else 0) + w
+        line.append((word, bold))
+    if line:
+        lines.append(line)
+    return lines
+
+
+def _tokens(text, bold_prefix=''):
+    return [(w, True) for w in bold_prefix.split()] + [(w, False) for w in text.split()]
+
+
+def _list_height(d, items, width, size, gap):
+    return sum(len(_rich_lines(d, t, width, size)) * round(size * 1.3) + gap for t in items) - gap
+
+
+def _fit_list(d, items, width, height, start, smallest, gap_ratio=0.45):
+    size = start
+    while size > smallest and _list_height(d, items, width, size, round(size * gap_ratio)) > height:
+        size -= 2
+    return size
+
+
+def _draw_rich(d, line, x, y, size, colours=(CREAM, CREAM)):
+    fonts = {False: font(size, 'Medium'), True: font(size, 'DemiBold')}
+    space = d.textlength(' ', font=fonts[False])
+    for k, (word, bold) in enumerate(line):
+        d.text((x, y), word, font=fonts[bold], fill=colours[bold])
+        x += d.textlength(word, font=fonts[bold]) + space
+
+
+def render_recipe(rec, out, background_path=None, photo_path=None, until=None):
+    """Title and times on top; photo and ingredients on the left; numbered steps on the right,
+    in one or two columns, sized to fit the screen."""
+    import recipe as recipe_mod
+    global L
+    L = LABELS['en']
+    bg = background(background_path).convert('RGBA')
+    bg = Image.blend(bg, Image.new('RGBA', (W, H), (10, 13, 18, 255)), 0.35)
+    layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    txt = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(txt)
+
+    # Header: name, then times and servings
+    name_size, lines = fit_lines(d, rec.get('name') or 'Recipe', 'Bold', W - 2 * M - 700, 130, 84, 1)
+    d.text((M, M - 30), lines[0], font=font(name_size, 'Bold'), fill=CREAM)
+    meta = rec.get('meta') or {}
+    bits = [f'{label} {meta[k]}' for k, label in (('prep', 'Prep'), ('cook', 'Cook'), ('total', 'Total')) if meta.get(k)]
+    if meta.get('servings'):
+        bits.append(f"Serves {meta['servings']}")
+    if bits:
+        d.text((M + 4, M + 145), '  ·  '.join(bits), font=font(62, 'Medium'), fill=SOFT)
+    if until:
+        d.text((W - M, M + 10), f'Showing until {until}', font=font(46, 'Medium'), fill=DIM, anchor='ra')
+    source = rec.get('source') or ''
+    if source:
+        host = re.sub(r'^www\.', '', urllib_host(source))
+        d.text((W - M, M + 80), host, font=font(46, 'Medium'), fill=DIM, anchor='ra')
+
+    top, bottom = M + 290, H - 110
+    split = 1700
+    # Left: photo, then ingredients
+    panel(layer, (M, top, split, bottom))
+    x0, x1 = M + 60, split - 60
+    y = top + 50
+    if photo_path:
+        try:
+            from PIL import ImageOps
+            ph = ImageOps.fit(Image.open(photo_path).convert('RGB'), (x1 - x0, 440), Image.LANCZOS)
+            mask = Image.new('L', ph.size, 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, ph.width, ph.height), radius=36, fill=255)
+            layer.paste(ph, (x0, y), mask)
+            y += 440 + 50
+        except Exception:  # noqa: BLE001  a bad image: carry on without it
+            pass
+    d.text((x0, y), 'Ingredients', font=font(72, 'DemiBold'), fill=CREAM)
+    y += 115
+    items, headings = [], {}
+    for ing in rec.get('ingredients') or []:
+        if isinstance(ing, dict):
+            headings[len(items)] = ing['heading']
+            items.append([(w, True) for w in ing['heading'].split()])
+        else:
+            qty, rest = recipe_mod.split_quantity(ing)
+            items.append(_tokens(rest, qty))
+    width = x1 - x0 - 50
+    size = _fit_list(d, items, width, bottom - 50 - y, 60, 36, 0.3)
+    gap = round(size * 0.3)
+    for k, toks in enumerate(items):
+        lines = _rich_lines(d, toks, width, size)
+        if k in headings:
+            for line in lines:
+                _draw_rich(d, line, x0, y, size, (ORANGE, ORANGE))
+                y += round(size * 1.3)
+        else:
+            r = size * 0.13
+            d.ellipse((x0 + 8, y + size * 0.55 - r, x0 + 8 + 2 * r, y + size * 0.55 + r), fill=ORANGE)
+            for line in lines:
+                _draw_rich(d, line, x0 + 50, y, size, (SOFT, CREAM))
+                y += round(size * 1.3)
+        y += gap
+
+    # Right: numbered steps, one column or two
+    panel(layer, (split + 60, top, W - M, bottom))
+    sx0, sx1 = split + 120, W - M - 60
+    d.text((sx0, top + 50), 'Steps', font=font(72, 'DemiBold'), fill=CREAM)
+    steps = [_tokens(s) for s in rec.get('steps') or []]
+    sy, height = top + 165, bottom - 50 - (top + 165)
+    full = sx1 - sx0
+    num_w = 100
+    one = _fit_list(d, steps, full - num_w, height, 62, 30, 0.6)
+    cols = 1
+    if one < 46 and len(steps) > 1:  # too small in one column: two columns read better
+        cols = 2
+    col_w = (full - 80) / cols if cols == 2 else full
+    size = one if cols == 1 else 62
+    if cols == 2:
+        size = 62
+        while size > 30:
+            gap = round(size * 0.6)
+            heights = [len(_rich_lines(d, t, col_w - num_w, size)) * round(size * 1.3) + gap for t in steps]
+            # fill column 1 until full, rest to column 2
+            col, used, ok = 0, 0, True
+            for h_ in heights:
+                if used + h_ - gap > height:
+                    col, used = col + 1, 0
+                    if col > 1:
+                        ok = False
+                        break
+                used += h_
+            if ok:
+                break
+            size -= 2
+    gap = round(size * 0.6)
+    col, cy = 0, sy
+    for n, toks in enumerate(steps, 1):
+        lines = _rich_lines(d, toks, col_w - num_w, size)
+        h_ = len(lines) * round(size * 1.3)
+        if cols == 2 and col == 0 and cy + h_ > sy + height:
+            col, cy = 1, sy
+        cx = sx0 + col * (col_w + 80)
+        rr = round(size * 0.62)
+        d.ellipse((cx, cy + size * 0.62 - rr, cx + 2 * rr, cy + size * 0.62 + rr), fill=ORANGE)
+        d.text((cx + rr, cy + size * 0.62), str(n), font=font(round(size * 0.8), 'Bold'), fill=(20, 22, 28), anchor='mm')
+        for line in lines:
+            _draw_rich(d, line, cx + num_w, cy, size)
+            cy += round(size * 1.3)
+        cy += gap
+    if rec.get('notes'):
+        nsize, nlines = fit_lines(d, 'Note: ' + rec['notes'], 'Medium', full, 44, 34, 2)
+        ny = bottom - 50 - len(nlines) * round(nsize * 1.3)
+        if ny > cy:
+            for line in nlines:
+                d.text((sx0, ny), line, font=font(nsize, 'Medium'), fill=DIM)
+                ny += round(nsize * 1.3)
+    Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=90)
+
+
+def urllib_host(url):
+    import urllib.parse
+    return urllib.parse.urlparse(url).netloc

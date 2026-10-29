@@ -47,6 +47,8 @@ DEFAULTS = {
     # beside the To do title, '|' between its two lines; '' = none
     # Analog clock behind the day of the week; style: ring, disc or minimal
     'clock': {'enabled': True, 'style': 'ring', 'opacity': 0.28, 'ahead_minutes': 3},
+    # Recipes shared from Paprika (Share → Recipe Text → Home Assistant); notify '' = the phone that shared
+    'recipe': {'enabled': True, 'minutes': 60, 'notify': ''},
     'todo_hint': 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete',
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }

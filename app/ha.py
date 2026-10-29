@@ -1,8 +1,12 @@
-"""Reading from Home Assistant over its REST API (read-only: this app never changes anything there).
+"""Home Assistant: reads states over REST; listens for shares and notification buttons; sends
+the recipe notification to the phone that shared. It never changes devices or configuration.
 
 Needs the Home Assistant address (e.g. http://192.168.0.20:8123) and a long-lived access token
 (Home Assistant → your profile → Security → Long-lived access tokens).
 """
+import json
+import re
+
 import requests
 
 import config
@@ -95,3 +99,104 @@ def states(cfg=None, domain=None):
     """All entities, or only one domain such as 'sensor' or 'lock'."""
     all_states = _get('states', cfg)
     return [s for s in all_states if not domain or s['entity_id'].startswith(domain + '.')]
+
+
+# ── Events (websocket): shares from the phone app, notification buttons ───────────────────────
+def _ws_url(cfg=None):
+    url, _ = settings(cfg)
+    return re.sub(r'^http', 'ws', url) + '/api/websocket'
+
+
+def _ws_open(cfg=None, timeout=TIMEOUT):
+    import websocket
+    _, token = settings(cfg)
+    ws = websocket.create_connection(_ws_url(cfg), timeout=timeout)
+    if json.loads(ws.recv()).get('type') != 'auth_required':
+        raise RuntimeError('unexpected Home Assistant websocket greeting')
+    ws.send(json.dumps({'type': 'auth', 'access_token': token}))
+    reply = json.loads(ws.recv())
+    if reply.get('type') != 'auth_ok':
+        ws.close()
+        raise RuntimeError('Home Assistant refused the token on the websocket')
+    return ws
+
+
+def ws_call(message, cfg=None):
+    """One websocket command (e.g. the device registry), on a short-lived connection."""
+    ws = _ws_open(cfg)
+    try:
+        ws.send(json.dumps(dict(message, id=1)))
+        while True:
+            reply = json.loads(ws.recv())
+            if reply.get('id') == 1 and reply.get('type') == 'result':
+                if not reply.get('success'):
+                    raise RuntimeError(str(reply.get('error')))
+                return reply.get('result')
+    finally:
+        ws.close()
+
+
+def listen(load_cfg, handlers, log=print, idle=60):
+    """Forever: subscribe to the given event types and call handlers[event_type](data).
+    Reconnects after Home Assistant restarts; says so in the log once per outage."""
+    import time
+    import websocket
+    failing = False
+    while True:
+        cfg = load_cfg()
+        if not configured(cfg):
+            time.sleep(30)
+            continue
+        try:
+            ws = _ws_open(cfg, timeout=idle)
+            for n, event_type in enumerate(handlers, 1):
+                ws.send(json.dumps({'id': n, 'type': 'subscribe_events', 'event_type': event_type}))
+            if failing:
+                log('Home Assistant events connected again')
+            failing = False
+            while True:
+                try:
+                    msg = json.loads(ws.recv())
+                except websocket.WebSocketTimeoutException:
+                    ws.ping()
+                    continue
+                if msg.get('type') == 'event':
+                    ev = msg.get('event') or {}
+                    fn = handlers.get(ev.get('event_type'))
+                    if fn:
+                        try:
+                            fn(ev.get('data') or {})
+                        except Exception as e:  # noqa: BLE001  one bad share must not end the listener
+                            log(f"Could not handle {ev.get('event_type')} ({type(e).__name__}: {e})")
+        except Exception as e:  # noqa: BLE001
+            if not failing:
+                log(f'Home Assistant events not reachable ({e}); still trying')
+            failing = True
+            time.sleep(15)
+
+
+def slug(name):
+    name = re.sub(r"[’'`]", '', name.lower())
+    return re.sub(r'[^a-z0-9]+', '_', name).strip('_')
+
+
+def notify_service_for(app_device_id, cfg=None):
+    """notify.mobile_app_<phone> for the phone that sent a share (its app's device id)."""
+    if not app_device_id:
+        return None
+    for dev in ws_call({'type': 'config/device_registry/list'}, cfg) or []:
+        if any(i[:2] == ['mobile_app', app_device_id] for i in dev.get('identifiers') or []):
+            return 'mobile_app_' + slug(dev.get('name_by_user') or dev.get('name') or '')
+    return None
+
+
+def notify(service, message, cfg=None, title=None, data=None):
+    url, token = settings(cfg)
+    body = {'message': message}
+    if title:
+        body['title'] = title
+    if data:
+        body['data'] = data
+    r = requests.post(f"{url}/api/services/notify/{service.removeprefix('notify.')}", headers=_headers(token),
+                      json=body, timeout=TIMEOUT)
+    r.raise_for_status()

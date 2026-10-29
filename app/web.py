@@ -21,6 +21,7 @@ import plan_data  # noqa: E402
 import jobs  # noqa: E402
 import tv  # noqa: E402
 import ha  # noqa: E402
+import recipe  # noqa: E402
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # phone photos
@@ -298,6 +299,21 @@ def _read_ha_fields(f, cfg):
 @protected
 def preview_week():
     return run_action('a_preview_week', lambda: jobs.preview_week(config.load()))
+
+
+@app.post('/recipe')
+@protected
+def show_recipe():
+    """Paste Paprika's Recipe Text (or any recipe with Ingredients:/Directions:) and show or preview it."""
+    f = request.form
+    text = f.get('recipe_text', '')
+    if not recipe.looks_like_recipe(text):
+        return redirect(url_for('index', msg=ui()['recipe_bad']))
+    rec = recipe.parse(text)
+    if f.get('action') == 'preview':
+        return run_action('a_recipe_preview', lambda: jobs.preview_recipe(config.load(), rec))
+    minutes = int(f['minutes']) if f.get('minutes', '').isdigit() else None
+    return run_action('a_recipe', lambda: jobs.show_recipe(config.load(), rec, minutes))
 
 
 @app.post('/banner')

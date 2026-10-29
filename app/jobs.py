@@ -14,6 +14,7 @@ import config
 import ha
 import todo_track
 import plan_data
+import recipe
 import render
 import tv
 import week
@@ -22,6 +23,8 @@ STATE_FILE = os.path.join(config.DATA, 'state.json')
 LOG_FILE = os.path.join(config.DATA, 'frame-daily-plan.log')
 PREVIEW = os.path.join(config.DATA, 'preview.jpg')
 LAST_IMAGE = os.path.join(config.DATA, 'last.jpg')
+RECIPE_FILE = os.path.join(config.DATA, 'recipe.json')
+RECIPE_PHOTOS = os.path.join(config.DATA, 'recipe-photos')
 ART_CACHE = os.path.join(config.DATA, 'art')
 RETRY_AFTER = 2 * 60  # after an error talking to an awake TV
 TICK = 15             # how often the scheduler looks; also how fast a TV waking up is noticed
@@ -238,6 +241,7 @@ def restore(cfg):
         state['restore_due'] = False
         state['until'] = None
         state['hide_pending'] = False
+        clear_recipe_notification(cfg, state)
         state['showing'] = None  # "Back to artwork" also stops today's refreshes
         save_state(state)
 
@@ -294,6 +298,10 @@ def _due(cfg, state, now):
         return None  # not set up yet
     if state.get('hide_pending'):
         return 'restore'  # asked to hide while the TV slept: do it the moment it wakes
+    if state.get('showing') == 'recipe':  # holds the screen; then the plan (in its window) or the artwork
+        if (state.get('until') or 0) > now.timestamp():
+            return None
+        return 'show' if view_for(cfg, now) else 'restore'
     every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
     refresh = 'refresh' if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every else None
     view = view_for(cfg, now)
@@ -377,6 +385,123 @@ def hide(cfg):
     log('TV asleep: the artwork goes back as soon as it wakes')
 
 
+# ── Recipes shared from Paprika ─────────────────────────────────────────────────────────────────
+RECIPE_ACTIONS = {'FRAME_RECIPE_MORE': '+30 min', 'FRAME_RECIPE_HIDE': 'Hide'}
+
+
+def _recipe_cfg(cfg):
+    return dict({'enabled': True, 'minutes': 60, 'notify': ''}, **(cfg.get('recipe') or {}))
+
+
+def _recipe_photo(rec):
+    import hashlib
+    src = rec.get('source') or ''
+    if not src:
+        return None
+    path = os.path.join(RECIPE_PHOTOS, hashlib.sha1(src.encode()).hexdigest()[:16] + '.jpg')
+    return path if os.path.exists(path) else recipe.fetch_photo(src, path)
+
+
+def show_recipe(cfg, rec, minutes=None, notify=None, until=None):
+    """Full-screen recipe on the TV until a time (minutes from now); wakes a sleeping TV, since
+    someone just asked for it. Afterwards the plan (in its window) or the artwork comes back."""
+    require_tv(cfg)
+    minutes = minutes or _recipe_cfg(cfg)['minutes']
+    until = until or time.time() + minutes * 60
+    woke = False
+    if not tv.awake(cfg['tv_ip']):
+        mac = load_state().get('tv_mac') or cfg.get('tv_mac')
+        woke = bool(mac) and tv.wake(cfg['tv_ip'], mac)
+        if not woke:
+            raise RuntimeError('the TV is asleep and did not wake up')
+    photo = _recipe_photo(rec)
+    until_text = datetime.datetime.fromtimestamp(until, zoneinfo.ZoneInfo(cfg['timezone'])).strftime('%-I:%M %p')
+
+    def make(a, state):
+        render.render_recipe(rec, LAST_IMAGE, artwork_background(cfg, a, state.get('restore_id')), photo, until_text)
+    put_temporary(cfg, make, f"Recipe “{rec.get('name', '')[:40]}” until {until_text}", kind='recipe', woke=woke,
+                  until=until)
+    with open(RECIPE_FILE, 'w') as f:
+        json.dump(rec, f)
+    with lock:
+        state = load_state()
+        state['recipe_notify'] = notify or state.get('recipe_notify')
+        save_state(state)
+    tell_phone(cfg, state.get('recipe_notify'), f"{rec.get('name', 'Recipe')} is on the Frame until {until_text}")
+
+
+def preview_recipe(cfg, rec):
+    render.render_recipe(rec, PREVIEW, cached_artwork(cfg, load_state()), _recipe_photo(rec), 'example')
+    log(f"Recipe preview “{rec.get('name', '')[:40]}”")
+
+
+def extend_recipe(cfg, minutes=30):
+    state = load_state()
+    if state.get('showing') != 'recipe' or not os.path.exists(RECIPE_FILE):
+        return
+    with open(RECIPE_FILE) as f:
+        rec = json.load(f)
+    show_recipe(cfg, rec, until=max(state.get('until') or 0, time.time()) + minutes * 60)
+
+
+def tell_phone(cfg, service, message):
+    if not service or not ha.configured(cfg):
+        return
+    try:
+        ha.notify(service, message, cfg, title='Frame', data={
+            'tag': 'frame_recipe', 'actions': [{'action': k, 'title': v} for k, v in RECIPE_ACTIONS.items()]})
+    except Exception as e:  # noqa: BLE001  the recipe still shows
+        log(f'Could not notify the phone ({e})')
+
+
+def clear_recipe_notification(cfg, state):
+    service = state.pop('recipe_notify', None)
+    if service and ha.configured(cfg):
+        try:
+            ha.notify(service, 'clear_notification', cfg, data={'tag': 'frame_recipe'})
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def on_share(data):
+    """mobile_app.share from the Home Assistant phone app: Paprika's 'Recipe Text' goes on the TV."""
+    cfg = config.load()
+    rcfg = _recipe_cfg(cfg)
+    text, caller = data.get('text') or '', data.get('caller') or ''
+    if not rcfg['enabled'] or not ('paprika' in caller or recipe.looks_like_recipe(text)):
+        return
+    if not recipe.looks_like_recipe(text):
+        log('Shared from Paprika, but not as Recipe Text: choose Share → Recipe Text')
+        return
+    rec = recipe.parse(text)
+    service = rcfg['notify'] or None
+    if not service:
+        try:
+            service = ha.notify_service_for(data.get('device_id'), cfg)
+        except Exception:  # noqa: BLE001
+            service = None
+    log(f"Recipe shared: {rec['name']}")
+    show_recipe(cfg, rec, rcfg['minutes'], service)
+
+
+def on_notification_action(data):
+    action = data.get('action')
+    if action not in RECIPE_ACTIONS:
+        return
+    cfg = config.load()
+    if action == 'FRAME_RECIPE_MORE':
+        log('Recipe: 30 more minutes')
+        extend_recipe(cfg)
+    else:
+        log('Recipe: hide requested from the phone')
+        hide(cfg)
+
+
+def listen_home_assistant():
+    ha.listen(config.load, {'mobile_app.share': on_share, 'mobile_app_notification_action': on_notification_action},
+              log=log)
+
+
 def watch_home_assistant():
     """Poll the show and hide buttons every few seconds; a press (a button's state is the time it was
     pressed) shows the plan or brings the artwork back. The first reading after a start is only
@@ -435,3 +560,4 @@ def scheduler():
 def start_scheduler():
     threading.Thread(target=scheduler, name='scheduler', daemon=True).start()
     threading.Thread(target=watch_home_assistant, name='ha-watch', daemon=True).start()
+    threading.Thread(target=listen_home_assistant, name='ha-events', daemon=True).start()
