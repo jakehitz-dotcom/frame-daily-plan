@@ -92,3 +92,57 @@ def test_web_paste_preview(monkeypatch):
     assert r.status_code == 302 and got == ['Red Curry Chicken and Rice Bowls']
     r = web.app.test_client().post('/recipe', data={'recipe_text': 'hello', 'action': 'show'})
     assert 'No recipe' in r.headers['Location'] or 'recipe' in r.headers['Location'].lower()
+
+
+ALLRECIPES = open(os.path.join(HERE, 'data', 'allrecipes_sample.html'), encoding='utf-8').read()
+URL = 'https://www.allrecipes.com/recipe/239867/chicken-tikka-masala/'
+
+
+def test_allrecipes_page_schema():
+    r = recipe.from_json_ld(ALLRECIPES, URL)
+    assert r['name'] == 'Easy Chicken Tikka Masala'
+    assert r['meta'] == {'prep': '15 min', 'cook': '30 min', 'total': '45 min', 'servings': '4'}
+    assert r['ingredients'][1] == '1 ½ pounds skinless, boneless chicken breast, cut into bite-size pieces'
+    assert r['steps'] == ['Heat oil in a large skillet over medium-high heat.',
+                          'Cook and stir chicken until no longer pink, about 8 minutes.',
+                          'Stir in tomato sauce, cream, and garam masala; simmer until thickened, about 15 minutes.']
+    assert r['image'] == 'https://www.allrecipes.com/thmb/tikka-4x3.jpg' and r['source'] == URL
+
+
+def test_other_schema_shapes():
+    graph = ('<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage"},'
+             '{"@type":"Recipe","name":"Pie","totalTime":"PT1H15M","recipeYield":"8 servings",'
+             '"recipeIngredient":["1 cup flour"],"recipeInstructions":[{"@type":"HowToSection","name":"Crust",'
+             '"itemListElement":[{"@type":"HowToStep","text":"Mix."},{"@type":"HowToStep","text":"Chill."}]},'
+             '{"@type":"HowToStep","text":"Bake."}],"image":["https://x.test/a.jpg"]}]}</script>')
+    r = recipe.from_json_ld(graph, 'https://x.test/pie')
+    assert r['steps'] == ['Mix.', 'Chill.', 'Bake.'] and r['meta'] == {'total': '1 hr 15 min', 'servings': '8'}
+    assert r['image'] == 'https://x.test/a.jpg'
+    assert recipe.from_json_ld('<html>no recipe here</html>', 'https://x.test') is None
+
+
+def test_shared_allrecipes_link_shows_the_recipe(monkeypatch):
+    shown, fetched = [], []
+    monkeypatch.setattr(jobs, 'show_recipe', lambda cfg, rec, minutes=None, notify=None, until=None:
+                        shown.append(rec['name']))
+    monkeypatch.setattr(jobs.ha, 'notify_service_for', lambda device_id, cfg=None: None)
+    monkeypatch.setattr(recipe, 'from_url', lambda url: fetched.append(url) or recipe.from_json_ld(ALLRECIPES, url))
+    jobs.on_share({'caller': 'android-app://com.android.chrome', 'subject': 'Easy Chicken Tikka Masala', 'url': URL})
+    jobs.on_share({'caller': 'android-app://com.allrecipes.spinner.free', 'text': f'Check out this recipe! {URL}'})
+    assert shown == ['Easy Chicken Tikka Masala'] * 2 and fetched == [URL, URL]
+
+
+def test_shared_link_without_a_recipe_shows_nothing(monkeypatch):
+    shown = []
+    monkeypatch.setattr(jobs, 'show_recipe', lambda *a, **k: shown.append(1))
+
+    def nope(url):
+        raise RuntimeError('no recipe found on that page')
+    monkeypatch.setattr(recipe, 'from_url', nope)
+    jobs.on_share({'caller': 'android-app://com.android.chrome', 'url': 'https://news.example.com/story'})
+    assert shown == []
+
+
+def test_mixed_number_with_space_is_one_amount():
+    assert recipe.split_quantity('1 ½ pounds skinless chicken') == ('1 ½ pounds', 'skinless chicken')
+    assert recipe.split_quantity('1½ cups rice') == ('1½ cups', 'rice')

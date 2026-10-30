@@ -395,11 +395,15 @@ def _recipe_cfg(cfg):
 
 def _recipe_photo(rec):
     import hashlib
-    src = rec.get('source') or ''
+    src = rec.get('image') or rec.get('source') or ''
     if not src:
         return None
     path = os.path.join(RECIPE_PHOTOS, hashlib.sha1(src.encode()).hexdigest()[:16] + '.jpg')
-    return path if os.path.exists(path) else recipe.fetch_photo(src, path)
+    if os.path.exists(path):
+        return path
+    if rec.get('image'):  # the recipe's own photo, from the page's recipe data
+        return recipe.fetch_image(rec['image'], path) or recipe.fetch_photo(rec.get('source') or '', path)
+    return recipe.fetch_photo(src, path)
 
 
 def show_recipe(cfg, rec, minutes=None, notify=None, until=None):
@@ -464,16 +468,26 @@ def clear_recipe_notification(cfg, state):
 
 
 def on_share(data):
-    """mobile_app.share from the Home Assistant phone app: Paprika's 'Recipe Text' goes on the TV."""
+    """mobile_app.share from the Home Assistant phone app: Paprika's 'Recipe Text', or a link to a
+    recipe page (Allrecipes, NYT Cooking, most recipe sites), goes on the TV."""
     cfg = config.load()
     rcfg = _recipe_cfg(cfg)
     text, caller = data.get('text') or '', data.get('caller') or ''
-    if not rcfg['enabled'] or not ('paprika' in caller or recipe.looks_like_recipe(text)):
+    if not rcfg['enabled']:
         return
-    if not recipe.looks_like_recipe(text):
-        log('Shared from Paprika, but not as Recipe Text: choose Share → Recipe Text')
-        return
-    rec = recipe.parse(text)
+    if recipe.looks_like_recipe(text):
+        rec = recipe.parse(text)
+    else:
+        url = data.get('url') or recipe.first_url(text)
+        if not url:
+            if 'paprika' in caller:
+                log('Shared from Paprika, but not as Recipe Text: choose Share → Recipe Text')
+            return
+        try:
+            rec = recipe.from_url(url)
+        except Exception as e:  # noqa: BLE001  not a recipe page (or the site refused): say why, show nothing
+            log(f'Shared link not shown as a recipe ({e}): {url[:80]}')
+            return
     service = rcfg['notify'] or None
     if not service:
         try:

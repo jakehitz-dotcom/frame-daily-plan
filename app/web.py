@@ -307,9 +307,15 @@ def show_recipe():
     """Paste Paprika's Recipe Text (or any recipe with Ingredients:/Directions:) and show or preview it."""
     f = request.form
     text = f.get('recipe_text', '')
-    if not recipe.looks_like_recipe(text):
+    if recipe.looks_like_recipe(text):
+        rec = recipe.parse(text)
+    elif recipe.first_url(text):
+        try:
+            rec = recipe.from_url(recipe.first_url(text))
+        except Exception as e:  # noqa: BLE001
+            return redirect(url_for('index', msg=f"{ui()['recipe_bad']} ({e})"))
+    else:
         return redirect(url_for('index', msg=ui()['recipe_bad']))
-    rec = recipe.parse(text)
     if f.get('action') == 'preview':
         return run_action('a_recipe_preview', lambda: jobs.preview_recipe(config.load(), rec))
     minutes = int(f['minutes']) if f.get('minutes', '').isdigit() else None

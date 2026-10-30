@@ -812,7 +812,7 @@ def render_recipe(rec, out, background_path=None, photo_path=None, until=None):
             qty, rest = recipe_mod.split_quantity(ing)
             items.append(_tokens(rest, qty))
     width = x1 - x0 - 50
-    size = _fit_list(d, items, width, bottom - 50 - y, 60, 36, 0.3)
+    size = _fit_list(d, items, width, bottom - 50 - y, 68, 36, 0.3)
     gap = round(size * 0.3)
     for k, toks in enumerate(items):
         lines = _rich_lines(d, toks, width, size)
@@ -835,8 +835,8 @@ def render_recipe(rec, out, background_path=None, photo_path=None, until=None):
     steps = [_tokens(s) for s in rec.get('steps') or []]
     sy, height = top + 165, bottom - 50 - (top + 165)
     full = sx1 - sx0
-    num_w = 100
-    one = _fit_list(d, steps, full - num_w, height, 62, 30, 0.6)
+    num_w = 118
+    one = _fit_list(d, steps, full - num_w, height, 72, 30, 0.6)
     cols = 1
     if one < 46 and len(steps) > 1:  # too small in one column: two columns read better
         cols = 2
@@ -867,9 +867,9 @@ def render_recipe(rec, out, background_path=None, photo_path=None, until=None):
         if cols == 2 and col == 0 and cy + h_ > sy + height:
             col, cy = 1, sy
         cx = sx0 + col * (col_w + 80)
-        rr = round(size * 0.62)
+        rr = round(size * 0.55)
         d.ellipse((cx, cy + size * 0.62 - rr, cx + 2 * rr, cy + size * 0.62 + rr), fill=ORANGE)
-        d.text((cx + rr, cy + size * 0.62), str(n), font=font(round(size * 0.8), 'Bold'), fill=(20, 22, 28), anchor='mm')
+        d.text((cx + rr, cy + size * 0.62), str(n), font=font(round(size * 0.72), 'Bold'), fill=(20, 22, 28), anchor='mm')
         for line in lines:
             _draw_rich(d, line, cx + num_w, cy, size)
             cy += round(size * 1.3)
