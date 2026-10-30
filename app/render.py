@@ -1164,6 +1164,6 @@ def render_severe(sv, out):
     sv_chart(d, layer, w_, hours, 'wind', s)
 
     d.text((m, H - 26), f"Updated at {sv['updated']}", font=font(30, 'Medium'), fill=(112, 115, 122), anchor='ls')
-    d.text((W - m, H - 26), 'Radar NOAA MRMS / IEM  ·  Map © OpenStreetMap © CARTO  ·  Forecast Open-Meteo, NWS',
+    d.text((W - m, H - 26), 'Radar NOAA MRMS / IEM  ·  Map © Esri, HERE, Garmin, © OpenStreetMap contributors  ·  Forecast Open-Meteo, NWS',
            font=font(30, 'Medium'), fill=(112, 115, 122), anchor='rs')
     Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=92)
