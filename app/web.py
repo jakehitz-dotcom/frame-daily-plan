@@ -182,7 +182,11 @@ def show_now():
 @app.post('/restore')
 @protected
 def restore_now():
-    return run_action('a_restore', lambda: jobs.restore(config.load()))
+    def back():
+        cfg = config.load()
+        jobs.dismiss_severe(cfg)  # severe weather monitoring stays away until its triggers change
+        jobs.restore(cfg)
+    return run_action('a_restore', back)
 
 
 @app.post('/upload')
@@ -264,6 +268,14 @@ def save_settings():
                             'start': f.get('week_start', '17:00'), 'end': f.get('week_end', '21:00')}
         if cfg['week_view']['start'] >= cfg['week_view']['end']:
             return redirect(url_for('index', msg=ui()['end_after_start']))
+    if 'severe_precip' in f:
+        sv = dict(cfg.get('severe') or {})
+        try:
+            sv.update(enabled='severe_enabled' in f, wake='severe_wake' in f,
+                      precip_in=float(f.get('severe_precip') or 0.3), gust_mph=float(f.get('severe_gust') or 25))
+        except ValueError:
+            return redirect(url_for('index', msg=ui()['severe_bad']))
+        cfg['severe'] = sv
     cfg['background'] = f.get('background', 'artwork')
     if 'todo_hint' in f:
         cfg['todo_hint'] = f['todo_hint'].strip()
@@ -293,6 +305,18 @@ def _read_ha_fields(f, cfg):
     cfg['home_assistant'] = dict(cur, url=url, token=f.get('ha_token', '').strip() or cur.get('token', ''))
     if 'ha_todo_lists' in f:
         cfg['home_assistant']['todo_lists'] = [e.strip() for e in f['ha_todo_lists'].split(',') if e.strip()]
+
+
+@app.post('/preview-severe')
+@protected
+def preview_severe():
+    return run_action('a_preview_severe', lambda: jobs.preview_severe(config.load()))
+
+
+@app.post('/show-severe')
+@protected
+def show_severe():
+    return run_action('a_show_severe', lambda: jobs.show_severe_for(config.load()))
 
 
 @app.post('/preview-week')

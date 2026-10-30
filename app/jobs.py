@@ -15,7 +15,9 @@ import ha
 import todo_track
 import plan_data
 import recipe
+import radar
 import render
+import severe
 import tv
 import week
 
@@ -293,7 +295,7 @@ def in_window(cfg, now):
     return view_for(cfg, now) is not None
 
 
-def _due(cfg, state, now):
+def _due(cfg, state, now, sev=None):
     if not cfg.get('tv_ip'):
         return None  # not set up yet
     if state.get('hide_pending'):
@@ -303,12 +305,24 @@ def _due(cfg, state, now):
             return None
         return 'show' if view_for(cfg, now) else 'restore'
     every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
+    stale = every and now.timestamp() - state.get('shown_at', 0) >= every
+    if state.get('showing') == 'severe' and (state.get('until') or 0) > now.timestamp():
+        return 'severe_refresh' if stale else None  # asked for by voice: kept up to date until its time is up
     refresh = 'refresh' if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every else None
     view = view_for(cfg, now)
     if view:
         if state.get('shown_on') != now.date().isoformat() or state.get('shown_view', 'day') != view:
             return 'show'  # also when Sunday's morning plan gives way to the week ahead
+        if state.get('showing') == 'severe':
+            return 'show'  # the voice-requested monitoring time is up: back to the plan
         return refresh  # a message, demo or "Back to artwork" in between is left alone
+    # Outside the planner's windows: severe weather monitoring while its triggers hold (unless dismissed).
+    if sev and sev.get('active') and state.get('severe_dismissed') != sev.get('signature'):
+        if state.get('showing') != 'severe':
+            return 'severe'
+        return 'severe_refresh' if stale else None
+    if state.get('showing') == 'severe':
+        return 'restore'  # triggers cleared (or hidden): back to the artwork
     until = state.get('until') or 0
     if until > now.timestamp():
         return refresh  # asked for by voice: kept up to date until its time is up
@@ -325,17 +339,31 @@ def tick(cfg, now, memo):
     - the window has ended: put the artwork back the next time the TV is awake.
     memo keeps what is only worth knowing between ticks (last wake attempt, asleep already logged)."""
     state = load_state()
-    action = _due(cfg, state, now)
+    sev = None
+    if severe.settings(cfg)['enabled'] and (cfg.get('weather') or {}).get('lat') is not None:
+        try:
+            sev = severe.status(cfg)
+        except Exception as e:  # noqa: BLE001
+            print('severe weather check:', e, file=sys.stderr)
+        if sev is not None and not sev.get('active') and state.get('severe_dismissed'):
+            state['severe_dismissed'] = None  # conditions cleared: the next episode shows again
+            save_state(state)
+    action = _due(cfg, state, now, sev)
     if not action or time.time() < memo.get('retry_at', 0):
         return None
     woke = False
     if not tv.awake(cfg['tv_ip']):
         mac = state.get('tv_mac') or cfg.get('tv_mac')
         window = f'{now.date().isoformat()}:{view_for(cfg, now)}'
+        if action == 'severe':  # once per severe weather episode, and not in the night's quiet hours
+            ss = severe.settings(cfg)
+            window = f"severe:{now.date().isoformat()}:{(sev or {}).get('signature')}" \
+                if ss['wake'] and not severe.in_quiet_hours(cfg, now) else None
         # The TV is woken once per window, at its start, and never again in it: refreshes, the end of
         # the window and a failed wake-up all wait for motion to wake the TV. Recorded in the state file,
         # so restarting the app cannot cause a second wake-up.
-        if action == 'show' and cfg.get('wake_tv', True) and mac and state.get('woke_for') != window:
+        if action in ('show', 'severe') and window and cfg.get('wake_tv', True) and mac \
+                and state.get('woke_for') != window:
             state['woke_for'] = window
             save_state(state)
             log('Waking the TV for the plan (once for this window)')
@@ -347,12 +375,15 @@ def tick(cfg, now, memo):
             if not memo.get('asleep_logged'):
                 memo['asleep_logged'] = True
                 if action != 'show' or not mac:
-                    what = {'show': 'the plan', 'refresh': 'the plan update', 'restore': 'putting the artwork back'}[action]
+                    what = {'show': 'the plan', 'refresh': 'the plan update', 'restore': 'putting the artwork back',
+                            'severe': 'severe weather monitoring'}.get(action, 'the update')
                     log(f'TV asleep: {what} goes ahead as soon as it wakes')
             return None
     memo['asleep_logged'] = False
     if action == 'restore':
         restore(cfg)
+    elif action in ('severe', 'severe_refresh'):
+        show_severe(cfg, refresh=action == 'severe_refresh', woke=woke)
     else:
         show_plan(cfg, refresh=action == 'refresh', woke=woke)
     return action
@@ -372,9 +403,10 @@ def show_for(cfg, minutes):
 
 
 def hide(cfg):
-    """Back to the artwork now (a voice request). A sleeping TV is not woken: the artwork goes back
+    """Back to the artwork now (a voice request). Also dismisses severe weather monitoring. A sleeping TV is not woken: the artwork goes back
     the moment it wakes, before anyone sees the plan."""
     require_tv(cfg)
+    dismiss_severe(cfg)
     if tv.awake(cfg['tv_ip']):
         restore(cfg)
         return
@@ -383,6 +415,89 @@ def hide(cfg):
         state.update(hide_pending=True, showing=None, until=None)
         save_state(state)
     log('TV asleep: the artwork goes back as soon as it wakes')
+
+
+# ── Severe weather monitoring ─────────────────────────────────────────────────────────────────
+RADAR_SIZE = (2012, 1152)   # the map's inner size on the screen
+
+
+def build_severe(cfg, now=None):
+    """Everything the monitoring screen shows, as of now."""
+    tz = zoneinfo.ZoneInfo(cfg['timezone'])
+    now = now or now_local(cfg)
+    st = severe.status(cfg)
+    g = severe.refresh_times(st.get('gathered') or severe.gather(cfg, now), now)
+    ev = severe.evaluate(cfg, g)
+    cur, om = {}, g.get('current_om') or {}
+    try:  # the planner's own numbers, so both screens agree
+        w = plan_data.words(cfg)
+        data = {'weather': plan_data.weather(cfg, now.date(), w), 'errors': []}
+        plan_data.local_weather(cfg, data, now, tz, w)
+        wx = data['weather']
+        cur = {'now': wx.get('now', round(om['temperature_2m']) if om.get('temperature_2m') is not None else None),
+               'max': wx.get('max'), 'min': wx.get('min'), 'icon': wx.get('icon'), 'text': wx.get('text')}
+    except Exception as e:  # noqa: BLE001
+        log(f'Severe weather: current conditions from the forecast only ({e})')
+        if om.get('temperature_2m') is not None:
+            cur = {'now': round(om['temperature_2m'])}
+    if om.get('apparent_temperature') is not None and om.get('temperature_2m') is not None and cur.get('now') is not None:
+        cur['feels'] = round(cur['now'] + om['apparent_temperature'] - om['temperature_2m'])
+    if g['hours']:
+        cur['pop'] = g['hours'][0]['pop']
+    if om.get('wind_speed_10m') is not None:
+        dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+        d = om.get('wind_direction_10m')
+        cur['wind_text'] = f"{round(om['wind_speed_10m'])} G {round(om.get('wind_gusts_10m') or 0)} mph" + \
+            (f' {dirs[round(d / 45) % 8]}' if d is not None else '')
+    rd = {}
+    try:
+        rd = radar.radar_map(cfg['weather']['lat'], cfg['weather']['lon'], *RADAR_SIZE,
+                             zoom=int(severe.settings(cfg).get('radar_zoom', 9)))
+    except Exception as e:  # noqa: BLE001
+        log(f'Radar unavailable ({e})')
+    return {'settings': severe.settings(cfg), 'active': ev['active'], 'reasons': ev['reasons'],
+            'place': (cfg.get('weather') or {}).get('name', '').split(',')[0] or 'Home',
+            'updated': now.strftime('%-I:%M %p'), 'alerts': g['alerts'], 'hours': g['hours'], 'eta': g['eta'],
+            'rain_24': ev['rain_24'], 'gust_max': ev['gust_max'], 'gust_at': ev['gust_at'], 'current': cur,
+            'radar': rd}
+
+
+def show_severe(cfg, refresh=False, woke=False, until=None):
+    def make(a, state):
+        render.render_severe(build_severe(cfg), LAST_IMAGE)
+    put_temporary(cfg, make, 'Severe weather monitoring updated' if refresh else 'Severe weather monitoring',
+                  kind='severe', only_if_changed=refresh, woke=woke, until=until)
+
+
+def show_severe_for(cfg, minutes=None):
+    """Asked for by voice: the monitoring screen now, for a while, whatever the triggers say."""
+    require_tv(cfg)
+    minutes = minutes or int(severe.settings(cfg)['minutes'])
+    woke = False
+    if not tv.awake(cfg['tv_ip']):
+        mac = load_state().get('tv_mac') or cfg.get('tv_mac')
+        woke = bool(mac) and tv.wake(cfg['tv_ip'], mac)
+        if not woke:
+            raise RuntimeError('the TV is asleep and did not wake up')
+    show_severe(cfg, woke=woke, until=time.time() + minutes * 60)
+
+
+def preview_severe(cfg):
+    render.render_severe(build_severe(cfg), PREVIEW)
+    log('Severe weather preview created')
+
+
+def dismiss_severe(cfg):
+    """Hiding the monitoring screen keeps it away until the triggers change (e.g. a new alert)."""
+    try:
+        sev = severe.status(cfg)
+    except Exception:  # noqa: BLE001
+        return
+    if sev.get('active'):
+        with lock:
+            state = load_state()
+            state['severe_dismissed'] = sev.get('signature')
+            save_state(state)
 
 
 # ── Recipes shared from Paprika ─────────────────────────────────────────────────────────────────
@@ -533,7 +648,7 @@ def watch_home_assistant():
                     print('todo tracking:', e, file=sys.stderr)
             ents = (cfg.get('home_assistant') or {}).get('entities') or {}
             if ha.configured(cfg) and cfg.get('tv_ip'):
-                for key in ('show_button', 'hide_button'):
+                for key in ('show_button', 'hide_button', 'severe_button'):
                     entity = ents.get(key)
                     if not entity:
                         continue
@@ -544,6 +659,9 @@ def watch_home_assistant():
                                 minutes = int(cfg['home_assistant'].get('show_minutes', 30))
                                 log(f'Plan requested from Home Assistant: showing it for {minutes} minutes')
                                 show_for(cfg, minutes)
+                            elif key == 'severe_button':
+                                log('Severe weather display requested from Home Assistant')
+                                show_severe_for(cfg)
                             else:
                                 log('Hide requested from Home Assistant: back to the artwork')
                                 hide(cfg)

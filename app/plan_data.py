@@ -13,6 +13,7 @@ import recurring_ical_events
 import banner
 import ha
 import nws
+import severe
 import todo_track
 
 TODO_PREFIXES = ('to-do:', 'todo:', 'task:', 'aufgabe:')
@@ -401,6 +402,13 @@ def build(cfg, now):
             data['home'], data['week'] = home(cfg, now)
         except Exception as e:  # noqa: BLE001  Home Assistant down: the plan appears without it
             errors.append(f'Home Assistant: {e}')
+    if data['weather'] and severe.settings(cfg)['enabled']:
+        try:
+            st = severe.status(cfg)
+            if st.get('active'):
+                data['weather']['severe'] = '  ·  '.join(st['reasons'][:3])
+        except Exception as e:  # noqa: BLE001
+            errors.append(f'Severe weather check: {e}')
     for e in data['today'] + data['tomorrow']:
         e.pop('end_dt', None)
         e.pop('sort', None)

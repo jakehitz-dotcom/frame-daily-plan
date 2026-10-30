@@ -118,6 +118,17 @@ def weather_panel(im, d, wx, week, x, x1, top):
     if draw:
         d.text((x, y), lines[0], font=font(size, 'Medium'), fill=CREAM)
     y += 88
+    if wx.get('severe'):  # severe weather monitoring is on: say why, and how to see it
+        size, lines = fit_one_or_two(d, 'SEVERE WEATHER: ' + wx['severe'], 'DemiBold', w - 40, 52, 40, 44)
+        top = y
+        for line in lines:
+            if draw:
+                d.text((x + 34, y), line, font=font(size, 'DemiBold'), fill=SV_RED)
+            y += round(size * 1.22)
+        if draw:
+            d.text((x + 34, y + 2), 'Say “Alexa, display severe weather”', font=font(42, 'Medium'), fill=SOFT)
+            d.rounded_rectangle((x, top + 4, x + 12, y + 50), radius=6, fill=SV_RED)
+        y += 74
     uv = wx.get('uv') or {}
     if uv.get('now') is not None or uv.get('from'):  # UV now, and today's hours above 4
         window = L['uv_window'].format(uv['from'], uv['to']) if uv.get('from') else ''
@@ -887,3 +898,272 @@ def render_recipe(rec, out, background_path=None, photo_path=None, until=None):
 def urllib_host(url):
     import urllib.parse
     return urllib.parse.urlparse(url).netloc
+
+
+# ── Severe weather monitoring ("battle station") ─────────────────────────────────────────────────
+SV_BG = (6, 10, 18)
+SV_PANEL = (13, 19, 31, 235)
+SV_EDGE = (46, 92, 132, 255)
+SV_CYAN = (86, 214, 255)
+SV_AMBER = (255, 184, 77)
+SV_RED = (255, 86, 86)
+SV_BLUE = (74, 140, 255)
+SV_GREEN = (110, 220, 160)
+DBZ = [(5, (4, 233, 231)), (15, (1, 159, 244)), (25, (2, 253, 2)), (35, (0, 187, 0)), (40, (253, 248, 2)),
+       (45, (229, 188, 0)), (50, (253, 149, 0)), (55, (253, 0, 0)), (60, (188, 0, 0)), (65, (248, 0, 253))]
+
+
+def sv_panel(layer, box, title=None, d=None, colour=SV_CYAN, right=None):
+    ImageDraw.Draw(layer).rounded_rectangle(box, radius=26, fill=SV_PANEL, outline=SV_EDGE, width=3)
+    if title and d is not None:
+        x, y = box[0] + 44, box[1] + 30
+        d.rectangle((x, y + 10, x + 10, y + 42), fill=colour)
+        d.text((x + 30, y), title, font=font(46, 'DemiBold'), fill=colour)
+        if right:
+            d.text((box[2] - 44, y + 4), right, font=font(42, 'Medium'), fill=SOFT, anchor='ra')
+
+
+def alert_colour(event):
+    e = event.lower()
+    return SV_RED if 'warning' in e else SV_AMBER if 'watch' in e else (255, 226, 92) if 'advisory' in e else SV_CYAN
+
+
+def _hour_label(t):
+    return t.strftime('%-I %p').lower().replace(' ', '')
+
+
+def sv_chart(d, layer, box, hours, kind, s):
+    """Precipitation (% line over hourly-amount bars) or wind (sustained area, gust line, threshold)."""
+    x0, y0, x1, y1 = box[0] + 150, box[1] + 190, box[2] - 140, box[3] - 90
+    ld = ImageDraw.Draw(layer)
+    n = len(hours)
+    if n < 2:
+        d.text(((x0 + x1) / 2, (y0 + y1) / 2), 'No forecast data', font=font(50, 'Medium'), fill=DIM, anchor='mm')
+        return
+    step = (x1 - x0) / n
+    X = lambda i: x0 + step * (i + 0.5)  # noqa: E731
+    for k in range(5):  # grid
+        gy = y1 - (y1 - y0) * k / 4
+        ld.line([(x0, gy), (x1, gy)], fill=(60, 90, 120, 90), width=2)
+    for i, h in enumerate(hours):
+        if i % 3 == 0:
+            d.text((X(i), y1 + 22), 'now' if i == 0 else _hour_label(h['t']), font=font(36, 'Medium'), fill=SOFT,
+                   anchor='ma')
+        if h['t'].hour == 0 and i:
+            ld.line([(x0 + step * i, y0), (x0 + step * i, y1)], fill=(110, 140, 170, 120), width=2)
+    if kind == 'rain':
+        top_in = max(0.1, max(h['rain'] for h in hours) * 1.25)
+        for k in range(5):
+            gy = y1 - (y1 - y0) * k / 4
+            d.text((x0 - 24, gy), f'{25 * k}%', font=font(34, 'Medium'), fill=SV_CYAN, anchor='rm')
+            d.text((x1 + 24, gy), f'{top_in * k / 4:.2f}', font=font(34, 'Medium'), fill=SV_BLUE, anchor='lm')
+        pts = [(X(i), y1 - (y1 - y0) * h['pop'] / 100) for i, h in enumerate(hours)]
+        area = Image.new('RGBA', layer.size, (0, 0, 0, 0))
+        ImageDraw.Draw(area).polygon([(pts[0][0], y1)] + pts + [(pts[-1][0], y1)], fill=SV_CYAN + (45,))
+        layer.alpha_composite(area)
+        for i, h in enumerate(hours):  # hourly amount bars
+            bh = (y1 - y0) * min(1, h['rain'] / top_in)
+            if bh > 1:
+                ld.rounded_rectangle((X(i) - step * 0.34, y1 - bh, X(i) + step * 0.34, y1), radius=6,
+                                     fill=SV_BLUE + (235,))
+        ld.line(pts, fill=SV_CYAN + (255,), width=6, joint='curve')
+        d.text((x0 - 24, y0 - 46), 'chance', font=font(34, 'Medium'), fill=SV_CYAN, anchor='rm')
+        d.text((x1 + 24, y0 - 46), 'in / hr', font=font(34, 'Medium'), fill=SV_BLUE, anchor='lm')
+    else:
+        top = max(30, max(max(h['gust'], h['wind']) for h in hours) * 1.15)
+        top = math.ceil(top / 10) * 10
+        for k in range(5):
+            gy = y1 - (y1 - y0) * k / 4
+            d.text((x0 - 24, gy), f'{round(top * k / 4)}', font=font(34, 'Medium'), fill=SOFT, anchor='rm')
+        d.text((x0 - 24, y0 - 46), 'mph', font=font(34, 'Medium'), fill=SOFT, anchor='rm')
+        sus = [(X(i), y1 - (y1 - y0) * h['wind'] / top) for i, h in enumerate(hours)]
+        gst = [(X(i), y1 - (y1 - y0) * h['gust'] / top) for i, h in enumerate(hours)]
+        area = Image.new('RGBA', layer.size, (0, 0, 0, 0))
+        ImageDraw.Draw(area).polygon([(sus[0][0], y1)] + sus + [(sus[-1][0], y1)], fill=SV_CYAN + (60,))
+        layer.alpha_composite(area)
+        ld.line(sus, fill=SV_CYAN + (255,), width=5, joint='curve')
+        ty = y1 - (y1 - y0) * s['gust_mph'] / top
+        for xx in range(int(x0), int(x1), 36):  # dashed threshold
+            ld.line([(xx, ty), (min(xx + 20, x1), ty)], fill=SV_RED + (210,), width=4)
+        d.text((x1 + 24, ty), f"{s['gust_mph']}", font=font(36, 'DemiBold'), fill=SV_RED, anchor='lm')
+        ld.line(gst, fill=SV_AMBER + (255,), width=6, joint='curve')
+        for (px, py), h in zip(gst, hours):
+            if h['gust'] > s['gust_mph']:
+                ld.ellipse((px - 11, py - 11, px + 11, py + 11), fill=SV_RED + (255,))
+        lx = x0
+        for label, colour in (('sustained', SV_CYAN), ('gusts', SV_AMBER)):
+            ld.rectangle((lx, y0 - 50, lx + 40, y0 - 42), fill=colour + (255,))
+            d.text((lx + 54, y0 - 46), label, font=font(36, 'Medium'), fill=colour, anchor='lm')
+            lx += 54 + d.textlength(label, font=font(36, 'Medium')) + 50
+
+
+def render_severe(sv, out):
+    """The severe weather monitoring screen: radar, watches and warnings, rain at the house, current
+    conditions, and the next 24 hours of rain and wind."""
+    global L
+    L = LABELS['en']
+    s = sv['settings']
+    bg = Image.new('RGBA', (W, H), SV_BG + (255,))
+    grid = ImageDraw.Draw(bg)
+    for gx in range(0, W, 96):
+        grid.line([(gx, 0), (gx, H)], fill=(14, 22, 34, 255), width=1)
+    for gy in range(0, H, 96):
+        grid.line([(0, gy), (W, gy)], fill=(14, 22, 34, 255), width=1)
+    layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    txt = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(txt)
+    m = 100
+
+    # Header
+    active = sv.get('active')
+    colour = SV_RED if active else SV_GREEN
+    d.ellipse((m, 92, m + 46, 138), fill=colour)
+    d.ellipse((m - 12, 80, m + 58, 150), outline=colour + (120,), width=4)
+    d.text((m + 84, 66), 'SEVERE WEATHER MONITORING', font=font(84, 'Bold'), fill=CREAM)
+    d.text((m + 88, 166), f"{sv.get('place') or 'Home'}  ·  updated {sv['updated']}", font=font(44, 'Medium'),
+           fill=SOFT)
+    chips = sv.get('reasons') or (['All clear: no triggers'] if not active else [])
+    cx = W - m
+    for chip in reversed(chips[:4]):
+        f = font(44, 'DemiBold')
+        tw = d.textlength(chip.upper(), font=f)
+        c = alert_colour(chip) if not chip.lower().startswith(('gust', 'all clear')) and 'rain' not in chip else (
+            SV_GREEN if chip.startswith('All clear') else SV_AMBER)
+        ImageDraw.Draw(layer).rounded_rectangle((cx - tw - 60, 86, cx, 160), radius=37, fill=c + (40,), outline=c + (255,),
+                                                width=3)
+        d.text((cx - tw / 2 - 30, 123), chip.upper(), font=f, fill=c, anchor='mm')
+        cx -= tw + 60 + 24
+
+    # Radar
+    rbox = (m, 250, 2140, 1430)
+    sv_panel(layer, rbox)
+    rd = sv.get('radar') or {}
+    inner = (rbox[0] + 14, rbox[1] + 14, rbox[2] - 14, rbox[3] - 14)
+    iw, ih = inner[2] - inner[0], inner[3] - inner[1]
+    img = rd.get('image')
+    mapimg = (img.resize((iw, ih)) if img.size != (iw, ih) else img.copy()) if img is not None else \
+        Image.new('RGBA', (iw, ih), (10, 14, 22, 255))
+    ov = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+    od = ImageDraw.Draw(ov)
+    hx, hy = iw / 2, ih / 2
+    if rd.get('m_per_px'):
+        for miles in (10, 25, 50):
+            r = miles * 1609.34 / rd['m_per_px']
+            od.ellipse((hx - r, hy - r, hx + r, hy + r), outline=SV_CYAN + (110,), width=3)
+            od.text((hx + r * 0.707 + 10, hy - r * 0.707 - 10), f'{miles} mi', font=font(34, 'DemiBold'),
+                    fill=SV_CYAN + (220,), anchor='lb')
+    for a, b in (((-46, 0), (-16, 0)), ((16, 0), (46, 0)), ((0, -46), (0, -16)), ((0, 16), (0, 46))):
+        od.line([(hx + a[0], hy + a[1]), (hx + b[0], hy + b[1])], fill=SV_CYAN + (255,), width=5)
+    od.ellipse((hx - 9, hy - 9, hx + 9, hy + 9), fill=SV_CYAN + (255,))
+    mapimg.alpha_composite(ov)
+    mask = Image.new('L', (iw, ih), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, iw, ih), radius=20, fill=255)
+    layer.paste(mapimg, inner[:2], mask)
+    ld = ImageDraw.Draw(layer)
+    label = 'RADAR  ·  ' + (f"{rd['source']}  ·  {rd['time'].strftime('%-I:%M %p')}" if rd.get('source')
+                             else 'unavailable right now')
+    f = font(40, 'DemiBold')
+    ld.rounded_rectangle((inner[0] + 24, inner[1] + 24, inner[0] + 24 + d.textlength(label, font=f) + 56,
+                          inner[1] + 96), radius=30, fill=(6, 10, 18, 210))
+    d.text((inner[0] + 52, inner[1] + 60), label, font=f, fill=SV_CYAN, anchor='lm')
+    lx, ly = inner[2] - 40 - 10 * 46, inner[3] - 76  # dBZ legend
+    ld.rounded_rectangle((lx - 160, ly - 24, inner[2] - 24, inner[3] - 20), radius=24, fill=(6, 10, 18, 210))
+    d.text((lx - 136, ly + 14), 'dBZ', font=font(34, 'DemiBold'), fill=SOFT, anchor='lm')
+    for k, (dbz, c) in enumerate(DBZ):
+        ld.rectangle((lx + k * 46, ly, lx + k * 46 + 46, ly + 28), fill=c + (255,))
+    d.text((lx, ly + 34), '5', font=font(28, 'Medium'), fill=SOFT)
+    d.text((lx + 10 * 46, ly + 34), '65+', font=font(28, 'Medium'), fill=SOFT, anchor='ra')
+
+    rx0, rx1 = 2190, W - m
+    # Current conditions
+    cur = sv.get('current') or {}
+    cbox = (rx0, 250, rx1, 580)
+    sv_panel(layer, cbox, 'CURRENT CONDITIONS', d)
+    if cur.get('icon'):
+        emoji(txt, cur['icon'], rx0 + 50, 360, 150)
+    if cur.get('now') is not None:
+        d.text((rx0 + 225, 330), f"{cur['now']}°", font=font(170, 'Bold'), fill=CREAM)
+    d.text((rx0 + 50, 512), cur.get('text') or '', font=font(46, 'Medium'), fill=SOFT)
+    stats = [('High / low', f"{cur['max']}° / {cur['min']}°" if cur.get('max') is not None else '–'),
+             ('Feels like', f"{cur['feels']}°" if cur.get('feels') is not None else '–'),
+             ('Rain chance', f"{cur['pop']}%" if cur.get('pop') is not None else '–'),
+             ('Wind', cur.get('wind_text') or '–')]
+    sx = rx0 + 760
+    for k, (lab, val) in enumerate(stats):
+        y = 340 + k * 62
+        d.text((sx, y), lab, font=font(40, 'Medium'), fill=DIM)
+        d.text((rx1 - 44, y), val, font=font(44, 'DemiBold'), fill=CREAM, anchor='ra')
+
+    # Rain at home
+    eta = sv.get('eta') or {}
+    ebox = (rx0, 615, rx1, 880)
+    sv_panel(layer, ebox, 'RAIN AT HOME', d, SV_BLUE)
+    state = eta.get('state', 'none')
+    if state == 'now':
+        big, small = 'RAINING NOW', (f"ends about {eta['ends'].strftime('%-I:%M %p')}" if eta.get('ends')
+                                     else 'continuing')
+    elif state == 'soon':
+        mins = eta['minutes']
+        big = f'{mins} MIN' if mins < 120 else f"{mins // 60} H {mins % 60:02d} M"
+        small = f"until rain starts  ·  about {eta['at'].strftime('%-I:%M %p')}"
+    elif state == 'later':
+        big, small = f"~{eta['at'].strftime('%-I %p')}", 'rain likely to start (hourly forecast)'
+    else:
+        big, small = 'NONE', 'no rain expected at the house'
+    d.text((rx0 + 50, 690), big, font=font(120, 'Bold'), fill=SV_BLUE if state != 'none' else SV_GREEN)
+    d.text((rx0 + 54, 822), small, font=font(40, 'Medium'), fill=SOFT)
+    strip = eta.get('strip') or []
+    if strip:  # next 3 hours in 15-minute bars
+        bx0, bx1, by1 = rx0 + 960, rx1 - 50, 830
+        bw = (bx1 - bx0) / 12
+        top = max(0.05, max(v for _, v in strip))
+        for k, (t, v) in enumerate(strip[:12]):
+            hgt = 150 * min(1, v / top)
+            ld.rectangle((bx0 + k * bw + 4, by1 - 150, bx0 + (k + 1) * bw - 4, by1), fill=(40, 60, 90, 120))
+            if hgt > 1:
+                ld.rectangle((bx0 + k * bw + 4, by1 - hgt, bx0 + (k + 1) * bw - 4, by1), fill=SV_BLUE + (255,))
+        for k, lab in ((0, 'now'), (4, '+1h'), (8, '+2h')):
+            d.text((bx0 + k * bw + 4, by1 + 10), lab, font=font(30, 'Medium'), fill=DIM)
+
+    # Watches and warnings
+    abox = (rx0, 915, rx1, 1430)
+    alerts = sv.get('alerts') or []
+    sv_panel(layer, abox, 'WATCHES & WARNINGS', d, SV_RED if alerts else SV_GREEN,
+             right=f'{len(alerts)} active' if alerts else None)
+    y = 1012
+    if not alerts:
+        d.text((rx0 + 50, y + 10), 'None in effect for the house', font=font(50, 'Medium'), fill=SV_GREEN)
+        d.text((rx0 + 50, y + 90), 'Monitoring: ' + ('; '.join(sv.get('reasons') or []) or 'no triggers'),
+               font=font(40, 'Medium'), fill=SOFT)
+    for a in alerts[:3]:
+        c = alert_colour(a['event'])
+        lines = wrap(d, a.get('headline') or a.get('summary') or '', font(36, 'Medium'), rx1 - rx0 - 140, max_lines=2)
+        need = 66 + len(lines) * 45 + 26
+        if y + need > abox[3] - 20:
+            d.text((rx0 + 50, y), f'+ {len(alerts) - alerts.index(a)} more', font=font(40, 'Medium'), fill=DIM)
+            break
+        ld.rounded_rectangle((rx0 + 50, y + 6, rx0 + 62, y + need - 30), radius=6, fill=c + (255,))
+        d.text((rx0 + 90, y), a['event'], font=font(52, 'Bold'), fill=c)
+        if a.get('ends'):
+            d.text((rx1 - 44, y + 12), 'until ' + a['ends'].strftime('%a %-I %p'), font=font(38, 'Medium'),
+                   fill=SOFT, anchor='ra')
+        for k, line in enumerate(lines):
+            d.text((rx0 + 90, y + 68 + k * 45), line, font=font(36, 'Medium'), fill=SOFT)
+        y += need
+
+    # 24-hour charts
+    hours = sv.get('hours') or []
+    p = (m, 1480, W / 2 - 25, H - 80)
+    sv_panel(layer, p, 'PRECIPITATION  ·  NEXT 24 H', d, SV_BLUE,
+             right=f"total {sv.get('rain_24', 0):.2f} in" if hours else None)
+    sv_chart(d, layer, p, hours, 'rain', s)
+    w_ = (W / 2 + 25, 1480, W - m, H - 80)
+    sv_panel(layer, w_, 'WIND  ·  NEXT 24 H', d, SV_AMBER,
+             right=(f"peak gust {sv['gust_max']} mph  ·  {sv['gust_at'].strftime('%-I %p')}"
+                    if sv.get('gust_max') is not None and sv.get('gust_at') else None))
+    sv_chart(d, layer, w_, hours, 'wind', s)
+
+    d.text((m, H - 26), f"Updated at {sv['updated']}", font=font(30, 'Medium'), fill=(112, 115, 122), anchor='ls')
+    d.text((W - m, H - 26), 'Radar NOAA MRMS / IEM  ·  Map © OpenStreetMap © CARTO  ·  Forecast Open-Meteo, NWS',
+           font=font(30, 'Medium'), fill=(112, 115, 122), anchor='rs')
+    Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=92)

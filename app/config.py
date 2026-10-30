@@ -35,6 +35,7 @@ DEFAULTS = {
         'last_bottle': 'sensor.finn_bottle',   # Huckleberry: time of the last bottle
         'show_button': 'input_button.frame_planner_show',  # pressed (e.g. by Alexa): show the plan for a while
         'hide_button': 'input_button.frame_planner_hide',  # pressed: back to the artwork now
+        'severe_button': 'input_button.frame_severe_show',  # pressed: severe weather monitoring screen
     }, 'show_minutes': 30,
         'todo_lists': ['todo.jakehitz_yahoo_com_to_do_list'],  # Home Assistant to-do lists (e.g. Google Tasks: todo.my_tasks) added to the to-do panel
     },
@@ -49,6 +50,10 @@ DEFAULTS = {
     'clock': {'enabled': True, 'style': 'ring', 'opacity': 0.28, 'ahead_minutes': 3},
     # Recipes shared from Paprika (Share → Recipe Text → Home Assistant); notify '' = the phone that shared
     'recipe': {'enabled': True, 'minutes': 60, 'notify': ''},
+    # Severe weather monitoring: shown outside the planner windows while, in the next 24 h, rain > precip_in,
+    # a gust > gust_mph, or any NWS alert; wakes the TV once per episode outside quiet hours
+    'severe': {'enabled': True, 'precip_in': 0.3, 'gust_mph': 25, 'minutes': 30, 'wake': True,
+               'quiet_start': '22:00', 'quiet_end': '06:00', 'radar_zoom': 9},
     'todo_hint': 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete',
     'background': 'artwork',  # "artwork": the picture the plan replaces, "default": bundled background
 }
