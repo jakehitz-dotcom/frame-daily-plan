@@ -164,7 +164,7 @@ def test_render_severe_screen(tmp_path):
     sv = {'settings': severe.settings(CFG), 'active': True, 'reasons': ev['reasons'], 'place': 'Eastvale',
           'updated': '1:07 PM', 'alerts': g['alerts'], 'hours': g['hours'], 'eta': g['eta'], 'rain_24': ev['rain_24'],
           'gust_max': ev['gust_max'], 'gust_at': ev['gust_at'],
-          'current': {'now': 61, 'max': 64, 'min': 52, 'icon': '🌧️', 'text': 'Rain', 'feels': 57, 'pop': 70,
+          'current': {'now': 61, 'max': 64, 'min': 52, 'icon': '🌧️', 'text': 'Scattered Rain Showers And Patchy Fog', 'feels': 57, 'pop': 70,
                       'wind_text': '14 G 27 mph SW'},
           'radar': {'image': None, 'source': None, 'time': None, 'm_per_px': 200}}
     out = tmp_path / 'severe.jpg'

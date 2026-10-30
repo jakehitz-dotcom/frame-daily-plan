@@ -1083,12 +1083,18 @@ def render_severe(sv, out):
         emoji(txt, cur['icon'], rx0 + 50, 360, 150)
     if cur.get('now') is not None:
         d.text((rx0 + 225, 330), f"{cur['now']}°", font=font(170, 'Bold'), fill=CREAM)
-    d.text((rx0 + 50, 512), cur.get('text') or '', font=font(46, 'Medium'), fill=SOFT)
+    sx = rx0 + 760
+    if cur.get('text'):  # one line, kept left of the stats: shrinks, then trims (e.g. "Scattered Rain Showers")
+        width, size, text = sx - rx0 - 150, 46, cur['text']
+        while size > 32 and d.textlength(text, font=font(size, 'Medium')) > width:
+            size -= 2
+        while len(text) > 4 and d.textlength(text, font=font(size, 'Medium')) > width:
+            text = text[:-2].rstrip() + '…'
+        d.text((rx0 + 50, 512 + (46 - size) // 2), text, font=font(size, 'Medium'), fill=SOFT)
     stats = [('High / low', f"{cur['max']}° / {cur['min']}°" if cur.get('max') is not None else '–'),
              ('Feels like', f"{cur['feels']}°" if cur.get('feels') is not None else '–'),
              ('Rain chance', f"{cur['pop']}%" if cur.get('pop') is not None else '–'),
              ('Wind', cur.get('wind_text') or '–')]
-    sx = rx0 + 760
     for k, (lab, val) in enumerate(stats):
         y = 340 + k * 62
         d.text((sx, y), lab, font=font(40, 'Medium'), fill=DIM)
