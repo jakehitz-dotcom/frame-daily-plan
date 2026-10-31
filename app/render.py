@@ -1104,13 +1104,19 @@ def render_severe(sv, out):
     ld.rounded_rectangle((inner[0] + 24, inner[1] + 24, inner[0] + 24 + d.textlength(label, font=f) + 56,
                           inner[1] + 96), radius=30, fill=(6, 10, 18, 210))
     d.text((inner[0] + 52, inner[1] + 60), label, font=f, fill=SV_CYAN, anchor='lm')
-    lx, ly = inner[2] - 40 - 10 * 46, inner[3] - 76  # dBZ legend
-    ld.rounded_rectangle((lx - 160, ly - 24, inner[2] - 24, inner[3] - 20), radius=24, fill=(6, 10, 18, 210))
-    d.text((lx - 136, ly + 14), 'dBZ', font=font(34, 'DemiBold'), fill=SOFT, anchor='lm')
+    # Legend: radar colours as rain rate (Marshall-Palmer Z = 200 R^1.6), not raw dBZ.
+    seg = 58
+    lx, ly = inner[2] - 44 - 10 * seg, inner[3] - 86
+    ld.rounded_rectangle((lx - 250, ly - 60, inner[2] - 24, inner[3] - 18), radius=24, fill=(6, 10, 18, 215))
+    d.text((lx - 226, ly + 14), 'RAIN RATE', font=font(30, 'DemiBold'), fill=SOFT, anchor='lm')
+    d.text((lx - 226, ly + 52), 'inches / hour', font=font(26, 'Medium'), fill=DIM, anchor='lm')
     for k, (dbz, c) in enumerate(DBZ):
-        ld.rectangle((lx + k * 46, ly, lx + k * 46 + 46, ly + 28), fill=c + (255,))
-    d.text((lx, ly + 34), '5', font=font(28, 'Medium'), fill=SOFT)
-    d.text((lx + 10 * 46, ly + 34), '65+', font=font(28, 'Medium'), fill=SOFT, anchor='ra')
+        ld.rectangle((lx + k * seg, ly, lx + (k + 1) * seg - 2, ly + 26), fill=c + (255,))
+    for k, word in ((0, 'light'), (2, 'moderate'), (5, 'heavy'), (7, 'violent')):
+        d.text((lx + k * seg, ly - 10), word, font=font(26, 'Medium'), fill=DIM, anchor='ls')
+    for k, label in ((2, '0.05'), (3, '0.2'), (5, '1'), (7, '4'), (9, 'hail')):
+        d.text((lx + k * seg + seg // 2, ly + 34), label, font=font(27, 'DemiBold'),
+               fill=(248, 120, 250) if label == 'hail' else SOFT, anchor='ma')
 
     rx0, rx1 = 2190, W - m
     # Current conditions

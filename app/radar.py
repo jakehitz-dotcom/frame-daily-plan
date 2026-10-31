@@ -12,7 +12,7 @@ import os
 import shutil
 
 import requests
-from PIL import Image, ImageFilter
+from PIL import Image, ImageChops, ImageFilter
 
 import config
 
@@ -74,21 +74,69 @@ def _tiles(layer, zoom, scale, x0, y0, w, h):
 
 
 def base_map(lat, lon, zoom, w, h):
-    """Dark map with place names centred on (lat, lon), w x h pixels; None if no tile could be had."""
+    """(dark map, place-name layer) centred on (lat, lon), w x h pixels; (None, None) if offline.
+    The names come separately so they can go on top of the radar."""
     if os.path.isdir(OLD_CACHE):
         shutil.rmtree(OLD_CACHE, ignore_errors=True)   # watermarked CARTO tiles from before
     cx, cy = world_px(lat, lon, zoom)
     x0, y0 = cx - w / 2, cy - h / 2
     base, got = _tiles(BASE, zoom, 2, x0, y0, w, h)
     if not got:
-        return None
+        return None, None
     img = Image.new('RGBA', (w, h), (10, 14, 22, 255))
     img.alpha_composite(base)
-    # The canvas is very dark: lift it a little so the coast and roads read from across the room.
-    img = Image.eval(img.convert('RGB'), lambda v: min(255, round(v * 1.25 + 6))).convert('RGBA')
     labels, _ = _tiles(LABELS, zoom, 1, x0, y0, w, h)
-    img.alpha_composite(labels)
-    return img
+    return img, labels
+
+
+def _otsu(hist):
+    total = sum(hist)
+    sum_all = sum(i * c for i, c in enumerate(hist))
+    best, t, w0, s0 = -1, 0, 0, 0
+    for i, c in enumerate(hist):
+        w0 += c
+        s0 += i * c
+        if not w0 or w0 == total:
+            continue
+        m0, m1 = s0 / w0, (sum_all - s0) / (total - w0)
+        between = w0 * (total - w0) * (m0 - m1) ** 2
+        if between > best:
+            best, t, sep = between, i, m1 - m0
+    return t, (sep if best >= 0 else 0)
+
+
+def coastline(base, key=None):
+    """The shoreline as a thin line layer, found in the map itself (water and land are two shades), so
+    it lines up exactly. Roads and specks are filtered out; None when the view has no clear coast."""
+    path = os.path.join(CACHE, f'coast-{key}.png') if key else None
+    if path and os.path.exists(path):
+        return Image.open(path).convert('L')
+    grey = base.convert('L').filter(ImageFilter.MedianFilter(5))
+    t, sep = _otsu(grey.histogram())
+    if sep < 4:
+        return None  # one shade only: all land (or all sea)
+    mask = grey.point(lambda v: 255 if v > t else 0)
+    for f in (ImageFilter.MinFilter(7), ImageFilter.MaxFilter(7), ImageFilter.MaxFilter(9), ImageFilter.MinFilter(9)):
+        mask = mask.filter(f)  # open (drop roads), then close (drop ponds and pools)
+    water = mask.histogram()[0] / (mask.width * mask.height)
+    edge = ImageChops.difference(mask.filter(ImageFilter.MaxFilter(3)), mask.filter(ImageFilter.MinFilter(3)))
+    share = (edge.width * edge.height - edge.histogram()[0]) / (edge.width * edge.height)
+    if not 0.02 < water < 0.98 or share > 0.03:
+        return None  # not a clean land/sea split: better no line than a scribble
+    if path:
+        os.makedirs(CACHE, exist_ok=True)
+        edge.save(path)
+    return edge
+
+
+def _outlined(colour, shape, glow):
+    """A layer in colour shaped like `shape` (an L mask), on a soft dark outline that keeps it
+    readable over bright radar colours."""
+    out = Image.new('RGBA', shape.size, (0, 0, 0, 0))
+    halo = shape.filter(ImageFilter.MaxFilter(glow)).filter(ImageFilter.GaussianBlur(2))
+    out.paste((4, 8, 14, 255), mask=halo.point(lambda v: round(v * 0.7)))
+    out.paste(colour, mask=shape)
+    return out
 
 
 def radar_overlay(lat, lon, zoom, w, h):
@@ -128,15 +176,24 @@ def smooth(radar, w, h):
 
 
 def radar_map(lat, lon, w, h, zoom=9):
-    """{'image': RGBA w x h, 'source', 'time', 'm_per_px'}: base map + radar, brightened a little."""
-    base = base_map(lat, lon, zoom, w, h)
+    """{'image': RGBA w x h, 'source', 'time', 'm_per_px'}. Drawn bottom to top: map, radar, then the
+    coastline and place names, so the geography stays readable even under a sky full of rain."""
+    base, labels = base_map(lat, lon, zoom, w, h)
+    has_map = base is not None
     if base is None:
         base = Image.new('RGBA', (w, h), (10, 14, 22, 255))
+    coast = coastline(base, f'{lat:.3f}_{lon:.3f}_{zoom}_{w}x{h}') if has_map else None
+    # The canvas is very dark: lift it a little so roads read from across the room.
+    img = Image.eval(base.convert('RGB'), lambda v: min(255, round(v * 1.25 + 6))).convert('RGBA')
     radar, source = radar_overlay(lat, lon, zoom, w, h)
     if radar is not None:
         radar = smooth(radar, w, h)
-        a = radar.getchannel('A').point(lambda v: min(255, round(v * 0.92)))
-        radar.putalpha(a)
-        base.alpha_composite(radar)
-    return {'image': base, 'source': source, 'time': datetime.datetime.now().astimezone() if source else None,
-            'm_per_px': metres_per_px(lat, zoom), 'has_map': base is not None}
+        radar.putalpha(radar.getchannel('A').point(lambda v: min(255, round(v * 0.85))))
+        img.alpha_composite(radar)
+    if coast is not None:
+        img.alpha_composite(_outlined((150, 205, 235, 235), coast.filter(ImageFilter.MaxFilter(3)), 9))
+    if labels is not None:
+        img.alpha_composite(_outlined((0, 0, 0, 0), labels.getchannel('A'), 7))  # dark halo only
+        img.alpha_composite(labels)
+    return {'image': img, 'source': source, 'time': datetime.datetime.now().astimezone() if source else None,
+            'm_per_px': metres_per_px(lat, zoom), 'has_map': has_map}
