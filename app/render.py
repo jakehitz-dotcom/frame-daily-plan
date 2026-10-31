@@ -443,6 +443,9 @@ def render(day, out, background_path=None):
     # The Home bar sits low, partly in the bottom margin, so the columns above lose as little as possible;
     # the month grid tightens to give the to-do list its rows back.
     bar = (M, bottom - 100, W - M, bottom + 70) if items and not day.get('quote') else None
+    qr = qr_image(day['guest_qr'], 200 if bar else 136) if day.get('guest_qr') else None
+    if qr and bar:  # the code sits in the bottom-right corner; the Home bar ends short of it
+        bar = (bar[0], bar[1], W - 24 - qr.width - 40, bar[3])
     cal_bottom, todo_top = (1200, 1250) if bar else (1300, 1350)
     if bar:
         bottom = bar[1] - 50
@@ -489,8 +492,6 @@ def render(day, out, background_path=None):
     # To-dos: open ones first (empty boxes), then today's completed ones (ticked, struck through).
     todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 160, bottom - 40)
 
-    if day.get('guest_qr'):  # top right of Today: guests scan it to put their recipe on the TV
-        guest_qr(im, d, day['guest_qr'], c2[1] - 60, M + 26, 196)
     events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40)
 
     if wx:
@@ -509,6 +510,8 @@ def render(day, out, background_path=None):
         final = with_banner(bg, content, day.get('banner'), day.get('countdown'))
     else:
         final = Image.alpha_composite(bg, content)
+    if qr:  # bottom-right corner of the whole screen, drawn last so a banner never shrinks or crops it
+        guest_qr(final, qr, W - 24, H - 24)
     if day.get('updated'):  # barely there, at the very edge
         ImageDraw.Draw(final).text((26, H - 20), L['updated_at'].format(day['updated']), font=font(32, 'Medium'),
                                    fill=(112, 115, 122), anchor='ls')
@@ -538,14 +541,13 @@ def qr_image(text, size):
     return tile
 
 
-def guest_qr(im, d, text, x1, y0, size):
-    """The code, right-aligned at x1, with a two-line invitation to its left."""
-    tile = qr_image(text, size)
-    im.alpha_composite(tile, (x1 - tile.width, y0))
-    mid = y0 + tile.height // 2
+def guest_qr(im, tile, x1, y1):
+    """The code with its bottom-right corner at (x1, y1), and a quiet invitation to its left."""
+    im.alpha_composite(tile, (x1 - tile.width, y1 - tile.height))
+    d = ImageDraw.Draw(im)
     tx = x1 - tile.width - 30
-    d.text((tx, mid - 8), L['guest_qr'], font=font(44, 'DemiBold'), fill=SOFT, anchor='rs')
-    d.text((tx, mid + 8), L['guest_qr_hint'], font=font(34, 'Medium'), fill=DIM, anchor='rt')
+    d.text((tx, y1 - 44), L['guest_qr'], font=font(36, 'DemiBold'), fill=SOFT, anchor='rs')
+    d.text((tx, y1 - 4), L['guest_qr_hint'], font=font(30, 'Medium'), fill=DIM, anchor='rs')
 
 
 # ── Banner across the top (custom message, birthday, holiday, Christmas countdown) ──────────────
