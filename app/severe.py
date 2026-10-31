@@ -60,6 +60,30 @@ def open_meteo(lat, lon, tz_name):
     raise last
 
 
+def week_ahead(cfg, now=None):
+    """{'rain': inches, 'gust': mph} over the next 7 days (168 hours from now), from the same Open-Meteo
+    hourly forecast as the 24-hour check, so the week's total always includes the next day's. Cached 30 min."""
+    loc = cfg['weather']
+    tz = zoneinfo.ZoneInfo(cfg['timezone'])
+    now = now or datetime.datetime.now(tz)
+
+    def fetch():
+        params = {'latitude': loc['lat'], 'longitude': loc['lon'], 'timezone': cfg['timezone'],
+                  'wind_speed_unit': 'mph', 'precipitation_unit': 'inch', 'forecast_days': 8,
+                  'hourly': 'precipitation,wind_gusts_10m'}
+        url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode(params)
+        return json.load(urllib.request.urlopen(url, timeout=20))
+    h = _cached(('week', round(loc['lat'], 3), round(loc['lon'], 3)), fetch, 1800).get('hourly') or {}
+    end = now + datetime.timedelta(days=7)
+    rain = gust = 0.0
+    for t, r, g in zip(h.get('time') or [], h.get('precipitation') or [], h.get('wind_gusts_10m') or []):
+        start = datetime.datetime.fromisoformat(t).replace(tzinfo=tz)
+        if start + datetime.timedelta(hours=1) > now and start < end:
+            rain += r or 0
+            gust = max(gust, g or 0)
+    return {'rain': round(rain, 2), 'gust': round(gust)}
+
+
 def _hours_from_open_meteo(om, now):
     h = om.get('hourly') or {}
     out = []

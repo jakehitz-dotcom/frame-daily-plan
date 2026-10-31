@@ -170,3 +170,16 @@ def test_render_severe_screen(tmp_path):
     out = tmp_path / 'severe.jpg'
     render.render_severe(sv, str(out))
     assert Image.open(out).size == (3840, 2160)
+
+
+def test_week_total_includes_the_next_24_hours(monkeypatch):
+    start = datetime.datetime(2026, 10, 27, 0, 0)
+    times = [(start + datetime.timedelta(hours=i)).isoformat(timespec='minutes') for i in range(8 * 24)]
+    rain = [0.05 if 13 <= i < 37 else 0.0 for i in range(8 * 24)]          # all of it in the next day
+    gusts = [12.0] * (8 * 24)
+    gusts[100] = 33.0
+    monkeypatch.setattr(severe, '_cached', lambda key, fn, fresh=0: {'hourly': {
+        'time': times, 'precipitation': rain, 'wind_gusts_10m': gusts}})
+    wk = severe.week_ahead(CFG, NOW)
+    day = severe.evaluate(CFG, gathered(om(rain=0.05)))['rain_24']
+    assert wk == {'rain': 1.2, 'gust': 33} and wk['rain'] >= day

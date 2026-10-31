@@ -266,6 +266,7 @@ def ahead(cfg, wx, grid, now, to_f):
 
 WIND_ALERT_MPH = 20   # the same thresholds as the alert tiles on the Eastvale dashboard
 RAIN_ALERT_IN = 0.25
+GUST_ALERT_MPH = 25   # the week's peak gust (Open-Meteo): same threshold as severe weather monitoring
 
 
 def _number(st):
@@ -403,6 +404,13 @@ def build(cfg, now):
             data['home'], data['week'] = home(cfg, now)
         except Exception as e:  # noqa: BLE001  Home Assistant down: the plan appears without it
             errors.append(f'Home Assistant: {e}')
+    if (cfg.get('weather') or {}).get('lat') is not None:
+        try:  # the week's rain and peak gust from the same forecast as severe weather, so the two agree
+            wk = severe.week_ahead(cfg, now)
+            data['week'] = {'wind': wk['gust'], 'wind_alert': wk['gust'] > GUST_ALERT_MPH,
+                            'rain': wk['rain'], 'rain_alert': wk['rain'] > RAIN_ALERT_IN}
+        except Exception as e:  # noqa: BLE001  keep Home Assistant's 7-day numbers
+            errors.append(f'7-day forecast: {e}')
     if data['weather'] and severe.settings(cfg)['enabled']:
         try:
             st = severe.status(cfg)

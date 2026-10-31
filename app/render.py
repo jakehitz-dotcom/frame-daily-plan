@@ -49,7 +49,7 @@ LABELS = {
            'initials': 'MTWTFSS', 'today': 'Today', 'tomorrow': 'Tomorrow', 'todos': 'To do',
            'no_todos': 'Nothing to do', 'no_events': 'No events', 'more': '… and more', 'more_n': '… and {} more', 'done_hidden': '({} additional completed {})', 'task': 'task', 'tasks': 'tasks', 'open_hidden': '({} more to do{} not shown)', 'and_done': ' · {} completed',
            'past': 'done', 'night': 'down to {}° tonight', 'all_day': 'All day',
-           'date': '{month} {day}', 'week': 'Next 7 days', 'wind': '{} mph peak', 'rain': '{} in rain',
+           'date': '{month} {day}', 'week': 'Next 7 days', 'wind': '{} mph gusts', 'rain': '{} in rain',
            'inside': 'Inside', 'heat': 'Heating to', 'cool': 'Cooling to', 'heat_cool': 'Auto',
            'hot_tub': 'Hot tub', 'dishwasher': 'Dishwasher', 'clean': 'Clean',
            'bottle': 'Last bottle {}', 'ago': '{} ago', 'hilo': 'High {}°  ·  Low {}°',
