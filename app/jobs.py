@@ -347,8 +347,9 @@ def tick(cfg, now, memo):
             sev = severe.status(cfg)
         except Exception as e:  # noqa: BLE001
             print('severe weather check:', e, file=sys.stderr)
-        if sev is not None and not sev.get('active') and state.get('severe_dismissed'):
-            state['severe_dismissed'] = None  # conditions cleared: the next episode shows again
+        stale = time.time() - (state.get('severe_dismissed_at') or 0) > DISMISS_HOURS * 3600
+        if state.get('severe_dismissed') and (stale or (sev is not None and not sev.get('active'))):
+            state['severe_dismissed'] = None  # conditions cleared, or long enough: it shows again
             save_state(state)
     action = _due(cfg, state, now, sev)
     if not action or time.time() < memo.get('retry_at', 0):
@@ -497,8 +498,14 @@ def preview_severe(cfg):
     log('Severe weather preview created')
 
 
+DISMISS_HOURS = 6
+
+
 def dismiss_severe(cfg):
-    """Hiding the monitoring screen keeps it away until the triggers change (e.g. a new alert)."""
+    """Hiding the monitoring screen while it is up keeps it away until the triggers change (e.g. a new
+    alert), for at most DISMISS_HOURS. Hiding the planner or a recipe does not dismiss severe weather."""
+    if load_state().get('showing') != 'severe':
+        return
     try:
         sev = severe.status(cfg)
     except Exception:  # noqa: BLE001
@@ -507,6 +514,7 @@ def dismiss_severe(cfg):
         with lock:
             state = load_state()
             state['severe_dismissed'] = sev.get('signature')
+            state['severe_dismissed_at'] = time.time()
             save_state(state)
 
 

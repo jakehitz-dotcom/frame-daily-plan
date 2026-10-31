@@ -1,4 +1,5 @@
 import datetime
+import time
 import zoneinfo
 
 from PIL import Image
@@ -139,7 +140,7 @@ def test_tick_does_not_wake_in_quiet_hours(monkeypatch):
 
 
 def test_dismissal_rearms_when_conditions_clear(monkeypatch):
-    jobs.save_state({'plan_ids': [], 'severe_dismissed': 'gust'})
+    jobs.save_state({'plan_ids': [], 'severe_dismissed': 'gust', 'severe_dismissed_at': time.time()})
     _tv(monkeypatch, dict(SEV, active=False), awake=True)
     jobs.tick(CFG, NOW, {})
     assert jobs.load_state().get('severe_dismissed') is None
@@ -183,3 +184,16 @@ def test_week_total_includes_the_next_24_hours(monkeypatch):
     wk = severe.week_ahead(CFG, NOW)
     day = severe.evaluate(CFG, gathered(om(rain=0.05)))['rain_24']
     assert wk == {'rain': 1.2, 'gust': 33} and wk['rain'] >= day
+
+
+def test_dismissal_expires_and_only_hiding_severe_dismisses(monkeypatch):
+    _tv(monkeypatch, SEV, awake=True)
+    jobs.save_state({'plan_ids': [], 'severe_dismissed': 'gust', 'severe_dismissed_at': time.time() - 7 * 3600})
+    jobs.tick(CFG, NOW, {})
+    assert jobs.load_state().get('severe_dismissed') is None          # yesterday's "hide" no longer counts
+    jobs.save_state({'plan_ids': [], 'showing': 'plan'})
+    jobs.dismiss_severe(CFG)                                           # "hide the planner"
+    assert not jobs.load_state().get('severe_dismissed')
+    jobs.save_state({'plan_ids': [], 'showing': 'severe'})
+    jobs.dismiss_severe(CFG)                                           # hiding the severe screen itself
+    assert jobs.load_state().get('severe_dismissed') == 'gust'
