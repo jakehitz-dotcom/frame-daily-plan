@@ -11,6 +11,7 @@ import icalendar
 import recurring_ical_events
 
 import banner
+import guest
 import ha
 import nws
 import severe
@@ -414,6 +415,7 @@ def build(cfg, now):
         e.pop('sort', None)
     if errors:
         print('plan warnings:', errors, file=sys.stderr)
+    data['guest_qr'] = guest.url(cfg)  # QR code: guests put their recipe on the TV
     return data
 
 

@@ -15,6 +15,7 @@ import ha
 import todo_track
 import plan_data
 import recipe
+import guest
 import radar
 import render
 import severe
@@ -211,6 +212,7 @@ def refresh_now(cfg):
 def show_demo(cfg, lang='en', on_tv=True):
     """Made-up plan (no real data) for sharing; shown like a plan."""
     data = plan_data.demo(cfg, now_local(cfg), lang)
+    data['guest_qr'] = guest.url(cfg)
     if not on_tv:
         render.render(data, PREVIEW, cached_artwork(cfg, load_state()))
         return
@@ -417,6 +419,14 @@ def hide(cfg):
     log('TV asleep: the artwork goes back as soon as it wakes')
 
 
+def end_recipe(cfg):
+    """A recipe taken down early: the plan in its window, otherwise the artwork."""
+    if view_for(cfg, now_local(cfg)):
+        show_plan(cfg)
+    else:
+        hide(cfg)
+
+
 # ── Severe weather monitoring ─────────────────────────────────────────────────────────────────
 RADAR_SIZE = (2012, 1152)   # the map's inner size on the screen
 
@@ -544,7 +554,8 @@ def show_recipe(cfg, rec, minutes=None, notify=None, until=None):
         json.dump(rec, f)
     with lock:
         state = load_state()
-        state['recipe_notify'] = notify or state.get('recipe_notify')
+        # notify=False: a guest's recipe; nobody's phone is told about it
+        state['recipe_notify'] = None if notify is False else (notify or state.get('recipe_notify'))
         save_state(state)
     tell_phone(cfg, state.get('recipe_notify'), f"{rec.get('name', 'Recipe')} is on the Frame until {until_text}")
 

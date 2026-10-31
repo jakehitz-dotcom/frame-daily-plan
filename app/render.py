@@ -11,6 +11,7 @@ import math
 import os
 import re
 
+import qrcode
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H = 3840, 2160
@@ -40,7 +41,7 @@ LABELS = {
            'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': '{}–{}', 'uv_high': 'Hoher UV: ', 'uv_now': 'UV {} jetzt',
            'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet',
            'xmas_days': 'Tage bis Weihnachten', 'xmas_tomorrow': 'Morgen ist Weihnachten!',
-           'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'updated_at': 'Aktualisiert um {}', 'at_a_glance': 'Die Woche auf einen Blick',
+           'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'updated_at': 'Aktualisiert um {}', 'guest_qr': 'Rezept teilen', 'guest_qr_hint': 'mit der Handykamera scannen', 'at_a_glance': 'Die Woche auf einen Blick',
            'nothing_planned': 'Nichts geplant'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
@@ -55,7 +56,7 @@ LABELS = {
            'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': '{}–{}', 'uv_high': 'High UV: ', 'uv_now': 'UV {} now',
            'quiet': 'Quiet week ahead: no storms or rain expected',
            'xmas_days': 'days until Christmas', 'xmas_tomorrow': 'Christmas is tomorrow!',
-           'week_ahead': 'The week ahead', 'updated': 'updated {}', 'updated_at': 'Updated at {}', 'at_a_glance': 'Week at a glance',
+           'week_ahead': 'The week ahead', 'updated': 'updated {}', 'updated_at': 'Updated at {}', 'guest_qr': 'Share a recipe', 'guest_qr_hint': 'scan with your phone camera', 'at_a_glance': 'Week at a glance',
            'nothing_planned': 'Nothing planned'},
 }
 L = LABELS['de']  # set per render
@@ -488,6 +489,8 @@ def render(day, out, background_path=None):
     # To-dos: open ones first (empty boxes), then today's completed ones (ticked, struck through).
     todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 160, bottom - 40)
 
+    if day.get('guest_qr'):  # top right of Today: guests scan it to put their recipe on the TV
+        guest_qr(im, d, day['guest_qr'], c2[1] - 60, M + 26, 196)
     events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40)
 
     if wx:
@@ -510,6 +513,39 @@ def render(day, out, background_path=None):
         ImageDraw.Draw(final).text((26, H - 20), L['updated_at'].format(day['updated']), font=font(32, 'Medium'),
                                    fill=(112, 115, 122), anchor='ls')
     final.convert('RGB').save(out, quality=90)
+
+
+QR_LIGHT, QR_DARK = (238, 233, 222, 255), (24, 27, 33, 255)
+
+
+def qr_image(text, size):
+    """A QR code as a light rounded tile about size px square: whole-pixel squares, 2-square margin."""
+    q = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, border=0)
+    q.add_data(text)
+    q.make(fit=True)
+    rows = q.get_matrix()
+    n = len(rows)
+    box = max(3, size // (n + 4))
+    side = box * (n + 4)
+    tile = Image.new('RGBA', (side, side), (0, 0, 0, 0))
+    td = ImageDraw.Draw(tile)
+    td.rounded_rectangle((0, 0, side - 1, side - 1), radius=box * 2, fill=QR_LIGHT)
+    for r, row in enumerate(rows):
+        for c, on in enumerate(row):
+            if on:
+                x, y = (c + 2) * box, (r + 2) * box
+                td.rectangle((x, y, x + box - 1, y + box - 1), fill=QR_DARK)
+    return tile
+
+
+def guest_qr(im, d, text, x1, y0, size):
+    """The code, right-aligned at x1, with a two-line invitation to its left."""
+    tile = qr_image(text, size)
+    im.alpha_composite(tile, (x1 - tile.width, y0))
+    mid = y0 + tile.height // 2
+    tx = x1 - tile.width - 30
+    d.text((tx, mid - 8), L['guest_qr'], font=font(44, 'DemiBold'), fill=SOFT, anchor='rs')
+    d.text((tx, mid + 8), L['guest_qr_hint'], font=font(34, 'Medium'), fill=DIM, anchor='rt')
 
 
 # ── Banner across the top (custom message, birthday, holiday, Christmas countdown) ──────────────

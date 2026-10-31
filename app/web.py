@@ -2,10 +2,13 @@
 
 Optional protection: set FRAME_PLAN_PASSWORD; the browser then asks for it (any user name).
 """
+import datetime
 import functools
+import io
 import os
 import sys
 import threading
+import time
 import zoneinfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # also when started with python -I
@@ -22,6 +25,7 @@ import jobs  # noqa: E402
 import tv  # noqa: E402
 import ha  # noqa: E402
 import recipe  # noqa: E402
+import guest  # noqa: E402
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # phone photos
@@ -46,13 +50,15 @@ def protected(view):
 @protected
 def index():
     cfg = config.load()
+    guest.learn_base(request.host_url)  # the address phones on this network can reach the app at
     lang = cfg.get('ui_lang', 'en')
     setup = {'tv': bool(cfg.get('tv_ip')), 'paired': os.path.exists(os.path.join(config.DATA, 'paired')),
              'place': cfg['weather'].get('lat') is not None, 'calendar': bool(cfg['calendars'])}
     return render_template('index.html', cfg=cfg, state=jobs.load_state(), log=list(jobs.recent)[-40:][::-1],
                            colors=config.COLORS, lang=lang, t=i18n.texts(lang), setup=setup,
                            setup_done=all(setup.values()), countries=sorted(holidays.list_supported_countries()),
-                           has_preview=os.path.exists(jobs.PREVIEW), message=request.args.get('msg'))
+                           has_preview=os.path.exists(jobs.PREVIEW), message=request.args.get('msg'),
+                           guest_url=guest.url(cfg))
 
 
 @app.get('/discover')
@@ -268,6 +274,8 @@ def save_settings():
                             'start': f.get('week_start', '17:00'), 'end': f.get('week_end', '21:00')}
         if cfg['week_view']['start'] >= cfg['week_view']['end']:
             return redirect(url_for('index', msg=ui()['end_after_start']))
+    if 'guest_url' in f:
+        cfg['guest'] = {'enabled': 'guest_enabled' in f, 'url': f.get('guest_url', '').strip().rstrip('/')}
     if 'severe_precip' in f:
         sv = dict(cfg.get('severe') or {})
         try:
@@ -305,6 +313,136 @@ def _read_ha_fields(f, cfg):
     cfg['home_assistant'] = dict(cur, url=url, token=f.get('ha_token', '').strip() or cur.get('token', ''))
     if 'ha_todo_lists' in f:
         cfg['home_assistant']['todo_lists'] = [e.strip() for e in f['ha_todo_lists'].split(',') if e.strip()]
+
+
+# ── Guest recipe sharing (QR code on the plan; no password, the code's token instead) ───────────
+_guest_last = [0.0]
+
+
+def _guest_ok(tok):
+    return guest.settings(config.load())['enabled'] and guest.check(tok)
+
+
+def _guest_gone():
+    return Response('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+                    '<body style="font:18px -apple-system,sans-serif;background:#15181e;color:#f1ece2;padding:32px">'
+                    '<h2>This code has expired</h2><p>Scan the QR code on the TV again.</p>', 404)
+
+
+def _guest_now_showing(cfg):
+    """(recipe name, until text) when a recipe is on the TV, else (None, None)."""
+    state = jobs.load_state()
+    if state.get('showing') != 'recipe' or (state.get('until') or 0) <= time.time():
+        return None, None
+    try:
+        import json
+        with open(jobs.RECIPE_FILE) as f:
+            name = json.load(f).get('name') or 'A recipe'
+    except (OSError, ValueError):
+        name = 'A recipe'
+    until = datetime.datetime.fromtimestamp(state['until'], zoneinfo.ZoneInfo(cfg['timezone'])).strftime('%-I:%M %p')
+    return name, until
+
+
+def _guest_page(tok, message=None, kind='', confirm=None, text='', status=200):
+    cfg = config.load()
+    showing, until = _guest_now_showing(cfg)
+    return render_template('guest.html', base=f'/G/{tok.upper()}', message=message, kind=kind, confirm=confirm,
+                           text=text, showing=None if confirm else showing, until=until, stamp=int(time.time()),
+                           minutes=jobs._recipe_cfg(cfg)['minutes']), status
+
+
+@app.get('/g/<tok>')
+@app.get('/G/<tok>')
+def guest_home(tok):
+    if not _guest_ok(tok):
+        return _guest_gone()
+    msg = {'shown': ('It’s on the TV! 🎉', 'ok'), 'hidden': ('Taken off the TV.', 'ok')}.get(request.args.get('m'))
+    return _guest_page(tok, *(msg or (None, '')))
+
+
+@app.post('/g/<tok>/show')
+@app.post('/G/<tok>/show')
+def guest_show(tok):
+    if not _guest_ok(tok):
+        return _guest_gone()
+    cfg = config.load()
+    text = (request.form.get('text') or '').strip()
+    if not text:
+        return _guest_page(tok, 'Paste a recipe link first.', 'bad')
+    if time.time() - _guest_last[0] < 8:
+        return _guest_page(tok, 'One moment: the TV is still busy with the last request. Try again in a few seconds.', 'bad')
+    current, _ = _guest_now_showing(cfg)
+    if current and not request.form.get('replace'):
+        return _guest_page(tok, confirm=current, text=text)
+    try:
+        if recipe.looks_like_recipe(text):
+            rec = recipe.parse(text)
+        elif recipe.first_url(text):
+            rec = recipe.from_url(recipe.first_url(text))
+        else:
+            return _guest_page(tok, 'That doesn’t look like a link or a recipe. Copy the page’s address and paste it here.', 'bad')
+    except Exception as e:  # noqa: BLE001
+        return _guest_page(tok, f'Couldn’t read a recipe from that page ({e}). Try another site, or paste the '
+                                'recipe text (with “Ingredients:” and “Directions:”).', 'bad')
+    _guest_last[0] = time.time()
+    try:
+        jobs.show_recipe(cfg, rec, notify=False)
+    except Exception as e:  # noqa: BLE001
+        jobs.log(f'Guest recipe failed: {e}')
+        return _guest_page(tok, f'The TV didn’t take it ({e}). Make sure it’s on, then try again.', 'bad')
+    jobs.log(f"Guest recipe “{rec.get('name', '')[:40]}” shown")
+    return redirect(f'/G/{tok.upper()}?m=shown')
+
+
+@app.post('/g/<tok>/hide')
+@app.post('/G/<tok>/hide')
+def guest_hide(tok):
+    if not _guest_ok(tok):
+        return _guest_gone()
+    cfg = config.load()
+    if jobs.load_state().get('showing') == 'recipe':
+        try:
+            jobs.end_recipe(cfg)
+        except Exception as e:  # noqa: BLE001
+            return _guest_page(tok, f'Couldn’t reach the TV ({e}).', 'bad')
+    return redirect(f'/G/{tok.upper()}?m=hidden')
+
+
+@app.get('/g/<tok>/tv.jpg')
+@app.get('/G/<tok>/tv.jpg')
+def guest_tv(tok):
+    if not _guest_ok(tok) or not os.path.exists(jobs.LAST_IMAGE):
+        return Response(status=404)
+    from PIL import Image
+    im = Image.open(jobs.LAST_IMAGE)
+    im.thumbnail((1280, 720))
+    buf = io.BytesIO()
+    im.convert('RGB').save(buf, 'JPEG', quality=80)
+    buf.seek(0)
+    return send_file(buf, mimetype='image/jpeg', max_age=0)
+
+
+@app.get('/guest-qr.png')
+@protected
+def guest_qr_png():
+    url = guest.url(config.load())
+    if not url:
+        return Response(status=404)
+    import render
+    buf = io.BytesIO()
+    render.qr_image(url, 360).save(buf, 'PNG')
+    buf.seek(0)
+    return send_file(buf, mimetype='image/png', max_age=0)
+
+
+@app.post('/guest-rotate')
+@protected
+def guest_rotate():
+    def go():
+        guest.rotate()
+        jobs.preview(config.load())
+    return run_action('a_guest_rotate', go)
 
 
 @app.post('/preview-severe')

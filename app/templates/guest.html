@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#15181e">
+<title>Share a recipe</title>
+<style>
+  :root { --bg: #15181e; --card: #1f232b; --ink: #f1ece2; --soft: #a3a69f; --line: #333843; --accent: #e8913a; --ok: #5fc49a; --bad: #e07070; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  .sub { color: var(--soft); margin: 0 0 22px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 16px; }
+  ol { margin: 0; padding-left: 22px; color: var(--soft); } ol li { margin: 4px 0; } ol b { color: var(--ink); }
+  textarea { width: 100%; min-height: 120px; font: inherit; padding: 12px; border-radius: 12px; border: 1px solid var(--line);
+             background: var(--bg); color: var(--ink); resize: vertical; }
+  button { font: inherit; font-weight: 600; width: 100%; padding: 15px; border-radius: 12px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--ink); margin-top: 12px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-size: 19px; }
+  button:disabled { opacity: .6; }
+  .msg { padding: 12px 14px; border-radius: 12px; background: var(--card); border-left: 4px solid var(--accent); margin-bottom: 16px; }
+  .msg.ok { border-color: var(--ok); } .msg.bad { border-color: var(--bad); }
+  img.tv { width: 100%; border-radius: 10px; border: 1px solid var(--line); display: block; margin-bottom: 4px; }
+  .hint { color: var(--soft); font-size: 14px; margin-top: 10px; }
+  .row { display: flex; gap: 10px; } .row button { flex: 1; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🍳 Put a recipe on the TV</h1>
+  <p class="sub">Works with most recipe sites (Allrecipes, NYT Cooking, Serious Eats, food blogs…) or pasted recipe text.</p>
+
+  {% if message %}<div class="msg {{ kind }}">{{ message }}</div>{% endif %}
+
+  {% if confirm %}
+  <div class="card">
+    <p style="margin-top:0">“<b>{{ confirm }}</b>” is on the TV right now. Replace it with yours?</p>
+    <form method="post" action="{{ base }}/show">
+      <input type="hidden" name="text" value="{{ text }}">
+      <input type="hidden" name="replace" value="1">
+      <div class="row"><button type="button" onclick="location.href='{{ base }}'">Keep it</button>
+        <button class="primary" type="submit">Replace</button></div>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if showing %}
+  <div class="card">
+    <img class="tv" src="{{ base }}/tv.jpg?{{ stamp }}" alt="What the TV is showing">
+    <p class="hint" style="margin-top:6px">“{{ showing }}” is on the TV{% if until %} until {{ until }}{% endif %}.</p>
+    <form method="post" action="{{ base }}/hide"><button type="submit">Take it off the TV</button></form>
+  </div>
+  {% endif %}
+
+  {% if not confirm %}
+  <div class="card">
+    <ol>
+      <li>On the recipe page, tap <b>Share</b> → <b>Copy</b> (or copy the address bar).</li>
+      <li>Paste it below and tap <b>Show on TV</b>.</li>
+    </ol>
+    <form method="post" action="{{ base }}/show" onsubmit="this.querySelector('.primary').disabled=true;this.querySelector('.primary').textContent='Sending to the TV…'">
+      <textarea name="text" id="text" placeholder="Paste a recipe link here" autocomplete="off" autocapitalize="off" spellcheck="false" style="margin-top:14px"></textarea>
+      <button type="button" id="paste" hidden>📋 Paste from clipboard</button>
+      <button class="primary" type="submit">Show on TV</button>
+    </form>
+    <p class="hint">The recipe stays up for {{ minutes }} minutes, then the TV goes back to normal.</p>
+  </div>
+  {% endif %}
+</main>
+<script>
+  // One-tap paste only works on secure (https) pages; on plain http the button stays hidden.
+  const b = document.getElementById('paste');
+  if (b && window.isSecureContext && navigator.clipboard && navigator.clipboard.readText) {
+    b.hidden = false;
+    b.onclick = async () => { try { document.getElementById('text').value = await navigator.clipboard.readText(); } catch (e) {} };
+  }
+</script>
+</body>
+</html>
