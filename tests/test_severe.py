@@ -197,3 +197,10 @@ def test_dismissal_expires_and_only_hiding_severe_dismisses(monkeypatch):
     jobs.save_state({'plan_ids': [], 'showing': 'severe'})
     jobs.dismiss_severe(CFG)                                           # hiding the severe screen itself
     assert jobs.load_state().get('severe_dismissed') == 'gust'
+
+
+def test_voice_plan_holds_over_severe_until_its_time_is_up():
+    t = NOW.timestamp()
+    plan = {'showing': 'plan', 'shown_at': t, 'until': t + 300, 'shown_on': '2026-10-27'}
+    assert jobs._due(CFG, plan, NOW + datetime.timedelta(seconds=30), SEV) is None
+    assert jobs._due(CFG, plan, NOW + datetime.timedelta(minutes=6), SEV) == 'severe'   # then back to the weather

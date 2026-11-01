@@ -318,6 +318,8 @@ def _due(cfg, state, now, sev=None):
         if state.get('showing') == 'severe':
             return 'show'  # the voice-requested monitoring time is up: back to the plan
         return refresh  # a message, demo or "Back to artwork" in between is left alone
+    if state.get('showing') == 'plan' and (state.get('until') or 0) > now.timestamp():
+        return refresh  # the plan asked for by voice wins until its time is up
     # Outside the planner's windows: severe weather monitoring while its triggers hold (unless dismissed).
     if sev and sev.get('active') and state.get('severe_dismissed') != sev.get('signature'):
         if state.get('showing') != 'severe':
@@ -676,6 +678,8 @@ def watch_home_assistant():
                         try:
                             if key == 'show_button':
                                 minutes = int(cfg['home_assistant'].get('show_minutes', 30))
+                                if load_state().get('showing') == 'severe':  # a quick look, then back to the weather
+                                    minutes = int(severe.settings(cfg).get('plan_peek_minutes', 5))
                                 log(f'Plan requested from Home Assistant: showing it for {minutes} minutes')
                                 show_for(cfg, minutes)
                             elif key == 'severe_button':
