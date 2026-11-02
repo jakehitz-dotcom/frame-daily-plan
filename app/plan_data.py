@@ -264,6 +264,19 @@ def ahead(cfg, wx, grid, now, to_f):
     wx['hint'] = dress(warm[1], cool[1], max(pops or [0]), uv_ahead, cfg.get('plan_lang', 'en'), when)
 
 
+def bottle_minutes(cfg, now):
+    """Minutes since Huckleberry's last bottle, or None (not set up, unknown, or over a day: stale)."""
+    entity = ((cfg.get('home_assistant') or {}).get('entities') or {}).get('last_bottle')
+    if not entity or not ha.configured(cfg):
+        return None
+    try:
+        at = datetime.datetime.fromisoformat(ha.state(entity, cfg)['state']).astimezone(now.tzinfo)
+    except (TypeError, ValueError, KeyError):
+        return None
+    mins = (now - at).total_seconds() / 60
+    return mins if 0 <= mins < 24 * 60 else None
+
+
 WIND_ALERT_MPH = 20   # the same thresholds as the alert tiles on the Eastvale dashboard
 RAIN_ALERT_IN = 0.25
 GUST_ALERT_MPH = 25   # the week's peak gust (Open-Meteo): same threshold as severe weather monitoring

@@ -204,3 +204,29 @@ def test_voice_plan_holds_over_severe_until_its_time_is_up():
     plan = {'showing': 'plan', 'shown_at': t, 'until': t + 300, 'shown_on': '2026-10-27'}
     assert jobs._due(CFG, plan, NOW + datetime.timedelta(seconds=30), SEV) is None
     assert jobs._due(CFG, plan, NOW + datetime.timedelta(minutes=6), SEV) == 'severe'   # then back to the weather
+
+
+def test_bottle_overdue_puts_the_plan_up_over_everything():
+    t = NOW.timestamp()
+    cfg = dict(CFG, home_assistant={'bottle_alert_hours': 3})
+    assert jobs._due(cfg, {'showing': 'severe', 'shown_at': t}, NOW, SEV, bottle=181) == 'bottle'
+    assert jobs._due(cfg, {'showing': 'recipe', 'until': t + 900}, NOW, None, bottle=200) == 'bottle'
+    assert jobs._due(cfg, {'hide_pending': True}, NOW, None, bottle=200) == 'bottle'
+    held = {'showing': 'plan', 'bottle_override': True, 'shown_at': t}
+    assert jobs._due(cfg, held, NOW, SEV, bottle=200) is None
+    assert jobs._due(cfg, held, NOW + datetime.timedelta(minutes=5), SEV, bottle=205) == 'refresh'
+    assert jobs._due(cfg, held, NOW, SEV, bottle=10) == 'bottle_end'
+    assert jobs._due(cfg, {}, NOW, None, bottle=179) is None
+    assert jobs._due(dict(CFG, home_assistant={'bottle_alert_hours': 0}), {}, NOW, None, bottle=500) is None
+
+
+def test_after_the_bottle_the_usual_screen_returns():
+    t = NOW.timestamp()
+    end = lambda prev: jobs._after_bottle(CFG, {'showing': 'plan', 'bottle_override': True, 'bottle_prev': prev}, NOW)  # noqa: E731
+    s = end({'showing': 'severe', 'until': None})
+    assert jobs._due(CFG, s, NOW, SEV) == 'severe'                     # rain still on: back to monitoring
+    assert jobs._due(CFG, end({'showing': None, 'until': None}), NOW, None) == 'restore'   # back to the artwork
+    s = end({'showing': 'recipe', 'until': t + 900})
+    assert s['resume']['showing'] == 'recipe' and jobs._due(CFG, s, NOW, None) == 'resume'
+    s = end({'showing': 'plan', 'until': t + 600})                     # "show the planner" had time left
+    assert s['until'] == t + 600 and jobs._due(CFG, dict(s, shown_at=t), NOW, None) is None

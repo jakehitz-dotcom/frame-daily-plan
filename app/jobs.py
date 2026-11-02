@@ -297,17 +297,31 @@ def in_window(cfg, now):
     return view_for(cfg, now) is not None
 
 
-def _due(cfg, state, now, sev=None):
+def bottle_overdue(cfg, minutes):
+    limit = (cfg.get('home_assistant') or {}).get('bottle_alert_hours', 3)
+    return bool(limit) and minutes is not None and minutes >= float(limit) * 60
+
+
+def _due(cfg, state, now, sev=None, bottle=None):
     if not cfg.get('tv_ip'):
         return None  # not set up yet
+    every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
+    stale = every and now.timestamp() - state.get('shown_at', 0) >= every
+    # A bottle 3 hours ago or more puts the plan up, whatever else is going on, until the next bottle.
+    if bottle_overdue(cfg, bottle):
+        if not state.get('bottle_override') or state.get('showing') != 'plan':
+            return 'bottle'
+        return 'refresh' if stale else None
+    if state.get('bottle_override'):
+        return 'bottle_end'  # fed: back to whatever would be showing now
+    if state.get('resume'):
+        return 'resume' if (state['resume'].get('until') or 0) > now.timestamp() else 'resume_drop'
     if state.get('hide_pending'):
         return 'restore'  # asked to hide while the TV slept: do it the moment it wakes
     if state.get('showing') == 'recipe':  # holds the screen; then the plan (in its window) or the artwork
         if (state.get('until') or 0) > now.timestamp():
             return None
         return 'show' if view_for(cfg, now) else 'restore'
-    every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
-    stale = every and now.timestamp() - state.get('shown_at', 0) >= every
     if state.get('showing') == 'severe' and (state.get('until') or 0) > now.timestamp():
         return 'severe_refresh' if stale else None  # asked for by voice: kept up to date until its time is up
     refresh = 'refresh' if every and state.get('showing') == 'plan' and now.timestamp() - state.get('shown_at', 0) >= every else None
@@ -353,7 +367,29 @@ def tick(cfg, now, memo):
         if state.get('severe_dismissed') and (stale or (sev is not None and not sev.get('active'))):
             state['severe_dismissed'] = None  # conditions cleared, or long enough: it shows again
             save_state(state)
-    action = _due(cfg, state, now, sev)
+    bottle = None
+    if bottle_overdue(cfg, 1e9):  # the rule is on: check Huckleberry (once a minute)
+        if time.time() - memo.get('bottle_at', 0) >= 60:
+            try:
+                memo['bottle'] = plan_data.bottle_minutes(cfg, now)
+            except Exception as e:  # noqa: BLE001  Home Assistant down: no override
+                memo['bottle'] = None
+                print('bottle check:', e, file=sys.stderr)
+            memo['bottle_at'] = time.time()
+        elif memo.get('bottle') is not None:
+            memo['bottle'] += (time.time() - memo.get('bottle_tick', time.time())) / 60
+        memo['bottle_tick'] = time.time()
+        bottle = memo.get('bottle')
+    action = _due(cfg, state, now, sev, bottle)
+    if action in ('bottle_end', 'resume_drop'):
+        state = _after_bottle(cfg, state, now) if action == 'bottle_end' else dict(state, resume=None)
+        save_state(state)
+        action = _due(cfg, state, now, sev, bottle)
+    if action == 'bottle' and state.get('showing') == 'plan':  # the plan is already up: just hold it there
+        state.update(bottle_override=True, bottle_prev={'showing': 'plan', 'until': state.get('until')}, until=None)
+        save_state(state)
+        log('Last bottle 3+ hours ago: the plan stays up until the next one')
+        return 'bottle'
     if not action or time.time() < memo.get('retry_at', 0):
         return None
     woke = False
@@ -387,11 +423,53 @@ def tick(cfg, now, memo):
     memo['asleep_logged'] = False
     if action == 'restore':
         restore(cfg)
+    elif action == 'bottle':
+        prev = {'showing': state.get('showing'), 'until': state.get('until')}
+        log('Last bottle 3+ hours ago: showing the plan until the next one')
+        show_plan(cfg, woke=woke)
+        with lock:
+            st = load_state()
+            st.update(bottle_override=True, bottle_prev=prev)
+            save_state(st)
+    elif action == 'resume':
+        resume(cfg)
     elif action in ('severe', 'severe_refresh'):
         show_severe(cfg, refresh=action == 'severe_refresh', woke=woke)
     else:
         show_plan(cfg, refresh=action == 'refresh', woke=woke)
     return action
+
+
+def _after_bottle(cfg, state, now):
+    """The bottle override is over: put state back as if the plan had not been forced up, so the usual
+    rules choose the screen. A recipe or voice request whose time is not up comes back for the rest of it."""
+    prev = state.get('bottle_prev') or {}
+    state = dict(state, bottle_override=False, bottle_prev=None)
+    left = (prev.get('until') or 0) > now.timestamp()
+    if left and prev.get('showing') == 'plan':
+        state['until'] = prev['until']                 # "show the planner" still has time to run
+    elif left and prev.get('showing') in ('recipe', 'severe'):
+        state['resume'] = prev                         # put the recipe / weather screen back
+    else:
+        state.update(until=None, restore_due=True)
+        if not view_for(cfg, now):
+            state['showing'] = 'bottle'                # not chosen by any rule: the rules replace it
+    log('Bottle logged: back to the usual display')
+    return state
+
+
+def resume(cfg):
+    state = load_state()
+    prev = state.get('resume') or {}
+    with lock:
+        st = load_state()
+        st['resume'] = None
+        save_state(st)
+    if prev.get('showing') == 'recipe' and os.path.exists(RECIPE_FILE):
+        with open(RECIPE_FILE) as f:
+            show_recipe(cfg, json.load(f), until=prev['until'])
+    elif prev.get('showing') == 'severe':
+        show_severe(cfg, until=prev['until'])
 
 
 def show_for(cfg, minutes):
