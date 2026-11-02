@@ -298,7 +298,7 @@ def in_window(cfg, now):
 
 
 def bottle_overdue(cfg, minutes):
-    limit = (cfg.get('home_assistant') or {}).get('bottle_alert_hours', 3)
+    limit = (cfg.get('home_assistant') or {}).get('bottle_alert_hours', 3.5)
     return bool(limit) and minutes is not None and minutes >= float(limit) * 60
 
 
@@ -307,7 +307,7 @@ def _due(cfg, state, now, sev=None, bottle=None):
         return None  # not set up yet
     every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
     stale = every and now.timestamp() - state.get('shown_at', 0) >= every
-    # A bottle 3 hours ago or more puts the plan up, whatever else is going on, until the next bottle.
+    # A bottle 3.5 hours ago or more (bottle_alert_hours) puts the plan up, whatever else is going on, until the next bottle.
     if bottle_overdue(cfg, bottle):
         if not state.get('bottle_override') or state.get('showing') != 'plan':
             return 'bottle'
@@ -388,7 +388,7 @@ def tick(cfg, now, memo):
     if action == 'bottle' and state.get('showing') == 'plan':  # the plan is already up: just hold it there
         state.update(bottle_override=True, bottle_prev={'showing': 'plan', 'until': state.get('until')}, until=None)
         save_state(state)
-        log('Last bottle 3+ hours ago: the plan stays up until the next one')
+        log('Last bottle over the alert time: the plan stays up until the next one')
         return 'bottle'
     if not action or time.time() < memo.get('retry_at', 0):
         return None
@@ -425,7 +425,7 @@ def tick(cfg, now, memo):
         restore(cfg)
     elif action == 'bottle':
         prev = {'showing': state.get('showing'), 'until': state.get('until')}
-        log('Last bottle 3+ hours ago: showing the plan until the next one')
+        log('Last bottle over the alert time: showing the plan until the next one')
         show_plan(cfg, woke=woke)
         with lock:
             st = load_state()

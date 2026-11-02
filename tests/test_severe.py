@@ -230,3 +230,7 @@ def test_after_the_bottle_the_usual_screen_returns():
     assert s['resume']['showing'] == 'recipe' and jobs._due(CFG, s, NOW, None) == 'resume'
     s = end({'showing': 'plan', 'until': t + 600})                     # "show the planner" had time left
     assert s['until'] == t + 600 and jobs._due(CFG, dict(s, shown_at=t), NOW, None) is None
+
+
+def test_bottle_default_is_three_and_a_half_hours():
+    assert not jobs.bottle_overdue(CFG, 209) and jobs.bottle_overdue(CFG, 210)
