@@ -43,17 +43,17 @@ def test_guest_shows_a_recipe_and_takes_it_down(monkeypatch):
     monkeypatch.setattr(jobs, 'show_recipe', lambda cfg, rec, notify=None, **k: (
         shown.append((rec['name'], notify)),
         jobs.save_state(dict(jobs.load_state(), showing='recipe', until=time.time() + 600))))
-    monkeypatch.setattr(jobs, 'end_recipe', lambda cfg: ended.append(1))
+    monkeypatch.setattr(jobs, 'screen_mode', lambda cfg, mode, minutes=30: ended.append(mode))
     web._guest_last[0] = 0
     page = client().get(f'/G/{tok}').get_data(as_text=True)
-    assert 'Show on TV' in page
+    assert 'Frame Remote' in page and 'Show recipe on TV' in page
     r = client().post(f'/G/{tok}/show', data={'text': RECIPE})
     assert r.status_code == 302 and shown == [('Pancakes', False)]   # nobody's phone is notified
     # A second guest is asked before replacing what's on the TV.
     web._guest_last[0] = 0
     ask = client().post(f'/g/{tok.lower()}/show', data={'text': RECIPE}).get_data(as_text=True)
     assert 'Replace it with yours?' in ask and len(shown) == 1
-    assert client().post(f'/G/{tok}/hide').status_code == 302 and ended == [1]
+    assert client().post(f'/G/{tok}/hide').status_code == 302 and ended == ['art']
 
 
 def test_too_fast_and_not_a_recipe():
@@ -63,3 +63,18 @@ def test_too_fast_and_not_a_recipe():
     web._guest_last[0] = 0
     jobs.save_state(dict(jobs.load_state(), showing=None))
     assert 'doesn’t look like' in client().post(f'/G/{tok}/show', data={'text': 'hello'}).get_data(as_text=True)
+
+
+def test_remote_buttons_switch_modes(monkeypatch):
+    tok = guest.token()
+    chosen = []
+    monkeypatch.setattr(jobs, 'screen_mode', lambda cfg, mode, minutes=30: chosen.append(mode))
+    jobs.save_state(dict(jobs.load_state(), showing='plan', shown_view='day', manual_until=None))
+    page = client().get(f'/G/{tok}').get_data(as_text=True)
+    assert 'Next 7 days' in page and 'Weather' in page and 'Artwork' in page
+    assert page.count('mode on') == 1                       # the planner is marked "On now"
+    web._guest_last[0] = 0
+    r = client().post(f'/G/{tok}/mode', data={'mode': 'week'})
+    assert r.status_code == 302 and chosen == ['week'] and 'mode-week' in r.headers['Location']
+    web._guest_last[0] = 0
+    assert 'Unknown' in client().post(f'/G/{tok}/mode', data={'mode': 'nope'}).get_data(as_text=True)

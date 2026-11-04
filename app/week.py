@@ -1,4 +1,4 @@
-"""The week ahead (shown on Sunday evenings): Monday to Sunday of the coming week, each day's weather
+"""The week ahead (shown on Sunday evenings, or on request): the next 7 days from tomorrow, each day's weather
 and events, and a short rule-based 'week at a glance'."""
 import datetime
 import json
@@ -17,8 +17,8 @@ WEEKDAYS_LONG = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturd
 
 
 def week_start(today):
-    """The Monday after today (on Sunday: tomorrow)."""
-    return today + datetime.timedelta(days=(7 - today.weekday()) or 7)
+    """Tomorrow: the week ahead is the next 7 days (on Sunday evening that is Monday to Sunday)."""
+    return today + datetime.timedelta(days=1)
 
 
 def ampm(hhmm):
@@ -255,7 +255,7 @@ def demo(today):
     days = []
     for i, (icon, hi, lo, pop, text, pills, events) in enumerate(sample):
         d = start + datetime.timedelta(days=i)
-        days.append({'date': d.isoformat(), 'weekday': WEEKDAYS[i], 'day': d.day, 'pills': pills,
+        days.append({'date': d.isoformat(), 'weekday': WEEKDAYS[d.weekday()], 'day': d.day, 'pills': pills,
                      'events': [{'start': t, 'title': n, 'color': c} for t, n, c in events],
                      'weather': {'icon': icon, 'hi': hi, 'lo': lo, 'text': text, 'pop': pop}})
     return {'start': start.isoformat(), 'end': (start + datetime.timedelta(days=6)).isoformat(), 'lang': 'en',

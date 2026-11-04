@@ -154,12 +154,23 @@ def listen(load_cfg, handlers, log=print, idle=60):
             if failing:
                 log('Home Assistant events connected again')
             failing = False
+            next_id, waiting, opened = len(handlers) + 1, False, time.time()
             while True:
                 try:
                     msg = json.loads(ws.recv())
                 except websocket.WebSocketTimeoutException:
-                    ws.ping()
+                    # Quiet for a minute: ask Home Assistant for a pong. No answer by the next minute means
+                    # a dead connection (e.g. Home Assistant froze or its VM restarted): reconnect.
+                    if waiting:
+                        raise ConnectionError('no answer from Home Assistant for 2 minutes')
+                    ws.send(json.dumps({'id': next_id, 'type': 'ping'}))
+                    next_id, waiting = next_id + 1, True
                     continue
+                waiting = False
+                if msg.get('type') == 'result' and not msg.get('success', True):
+                    log(f"Home Assistant refused an event subscription: {msg.get('error')}")
+                if time.time() - opened > 3600 and msg.get('type') == 'pong':
+                    break  # a fresh connection every hour or so, whatever the network did meanwhile
                 if msg.get('type') == 'event':
                     ev = msg.get('event') or {}
                     fn = handlers.get(ev.get('event_type'))
@@ -168,6 +179,7 @@ def listen(load_cfg, handlers, log=print, idle=60):
                             fn(ev.get('data') or {})
                         except Exception as e:  # noqa: BLE001  one bad share must not end the listener
                             log(f"Could not handle {ev.get('event_type')} ({type(e).__name__}: {e})")
+            ws.close()
         except Exception as e:  # noqa: BLE001
             if not failing:
                 log(f'Home Assistant events not reachable ({e}); still trying')

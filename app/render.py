@@ -41,7 +41,7 @@ LABELS = {
            'uv_names': ['extrem', 'sehr hoch', 'hoch', 'mittel', 'niedrig'], 'uv_window': '{}–{}', 'uv_high': 'Hoher UV: ', 'uv_now': 'UV {} jetzt',
            'quiet': 'Ruhige Woche: kein Regen oder Sturm erwartet',
            'xmas_days': 'Tage bis Weihnachten', 'xmas_tomorrow': 'Morgen ist Weihnachten!',
-           'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'updated_at': 'Aktualisiert um {}', 'guest_qr': 'Rezept teilen', 'guest_qr_hint': 'mit der Handykamera scannen', 'at_a_glance': 'Die Woche auf einen Blick',
+           'week_ahead': 'Die kommende Woche', 'updated': 'aktualisiert {}', 'updated_at': 'Aktualisiert um {}', 'guest_qr': 'Frame-Fernbedienung', 'guest_qr_hint': 'scannen: Anzeige wechseln, Rezept teilen', 'at_a_glance': 'Die Woche auf einen Blick',
            'nothing_planned': 'Nichts geplant'},
     'en': {'weekdays': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
            'months': ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September',
@@ -56,7 +56,7 @@ LABELS = {
            'uv_names': ['extreme', 'very high', 'high', 'moderate', 'low'], 'uv_window': '{}–{}', 'uv_high': 'High UV: ', 'uv_now': 'UV {} now',
            'quiet': 'Quiet week ahead: no storms or rain expected',
            'xmas_days': 'days until Christmas', 'xmas_tomorrow': 'Christmas is tomorrow!',
-           'week_ahead': 'The week ahead', 'updated': 'updated {}', 'updated_at': 'Updated at {}', 'guest_qr': 'Share a recipe', 'guest_qr_hint': 'scan with your phone camera', 'at_a_glance': 'Week at a glance',
+           'week_ahead': 'The week ahead', 'updated': 'updated {}', 'updated_at': 'Updated at {}', 'guest_qr': 'Frame Remote', 'guest_qr_hint': 'scan to change the screen or share a recipe', 'at_a_glance': 'Week at a glance',
            'nothing_planned': 'Nothing planned'},
 }
 L = LABELS['de']  # set per render
@@ -398,7 +398,7 @@ def events(d, items, x, y, w, bottom, scale=1.0):
         lines = wrap(d, ev['title'], tf, w - 60)
         need = s(80) + len(lines) * s(92) + s(50)
         if y + need > bottom:
-            d.text((x, y), L['more'], font=font(64, 'Medium'), fill=DIM)
+            d.text((x, y), L['more'], font=font(s(64), 'Medium'), fill=DIM)
             return
         past = ev.get('past')
         color = COLORS['grey'] if past else COLORS.get(ev.get('color', 'green'), COLORS['green'])
@@ -492,12 +492,12 @@ def render(day, out, background_path=None):
     # To-dos: open ones first (empty boxes), then today's completed ones (ticked, struck through).
     todo_list(d, day.get('todos', []), day.get('todos_done', []), c1[0] + 70, c1[1] - 70, todo_top + 160, bottom - 40)
 
-    events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40)
+    events(d, day.get('today', []), c2[0] + 70, M + 200, c2[1] - c2[0] - 140, bottom - 40, scale=0.86)
 
     if wx:
         weather_panel(im, d, wx, week, c3[0] + 70, c3[1] - 70, M)
 
-    events(d, day.get('tomorrow', []), c3[0] + 70, wx_bottom + 215, c3[1] - c3[0] - 140, bottom - 40, scale=0.82)
+    events(d, day.get('tomorrow', []), c3[0] + 70, wx_bottom + 215, c3[1] - c3[0] - 140, bottom - 40, scale=0.72)
     if bar:
         home_bar(im, bar, items)
 

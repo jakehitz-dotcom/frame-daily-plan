@@ -97,10 +97,9 @@ def fakes(monkeypatch):
     monkeypatch.setattr(week.urllib.request, 'urlopen', lambda url, timeout: io.BytesIO(json.dumps(METEO).encode()))
 
 
-def test_week_starts_on_the_monday_after_today():
-    assert week.week_start(D(2026, 11, 1)) == D(2026, 11, 2)    # Sunday evening: tomorrow
-    assert week.week_start(D(2026, 11, 4)) == D(2026, 11, 9)    # mid-week preview: next Monday
-    assert week.week_start(D(2026, 11, 2)) == D(2026, 11, 9)    # Monday: the following one
+def test_week_starts_tomorrow():
+    assert week.week_start(D(2026, 11, 1)) == D(2026, 11, 2)    # Sunday evening: Monday to Sunday
+    assert week.week_start(D(2026, 11, 4)) == D(2026, 11, 5)    # Wednesday: Thursday to next Wednesday
 
 
 def test_week_build_days_weather_and_summary(monkeypatch):

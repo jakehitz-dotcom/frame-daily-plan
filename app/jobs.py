@@ -177,10 +177,14 @@ def put_temporary(cfg, make_image, what, kind='other', only_if_changed=False, wo
         return state
 
 
-def show_plan(cfg, refresh=False, woke=False, until=None):
-    """The current view: the week ahead in its Sunday-evening window, otherwise the daily plan."""
+def show_plan(cfg, refresh=False, woke=False, until=None, view=None):
+    """The current view: the week ahead in its Sunday-evening window (or when chosen on the Screen
+    Control page), otherwise the daily plan."""
     now = now_local(cfg)
-    view = view_for(cfg, now) or 'day'
+    st = load_state()
+    if not view and (st.get('manual_until') or 0) > time.time():
+        view = st.get('manual_view')
+    view = view or view_for(cfg, now) or 'day'
 
     def make(a, state):
         bg = artwork_background(cfg, a, state.get('restore_id'))
@@ -307,6 +311,13 @@ def _due(cfg, state, now, sev=None, bottle=None):
         return None  # not set up yet
     every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
     stale = every and now.timestamp() - state.get('shown_at', 0) >= every
+    # Chosen on the Screen Control page (or a recipe shared): holds the screen for its time, kept fresh.
+    if (state.get('manual_until') or 0) > now.timestamp():
+        if stale and state.get('showing') == 'plan':
+            return 'refresh'
+        if stale and state.get('showing') == 'severe':
+            return 'severe_refresh'
+        return None
     # A bottle 3.5 hours ago or more (bottle_alert_hours) puts the plan up, whatever else is going on, until the next bottle.
     if bottle_overdue(cfg, bottle):
         if not state.get('bottle_override') or state.get('showing') != 'plan':
@@ -472,10 +483,75 @@ def resume(cfg):
         show_severe(cfg, until=prev['until'])
 
 
+SCREEN_MODES = ('art', 'plan', 'week', 'weather', 'recipe')
+
+
+def current_mode(state=None, now=None):
+    """What the TV shows, in Screen Control terms."""
+    state = state or load_state()
+    showing = state.get('showing')
+    if showing == 'plan':
+        return 'week' if state.get('shown_view') == 'week' or state.get('manual_view') == 'week' else 'plan'
+    return {'severe': 'weather', 'recipe': 'recipe', None: 'art'}.get(showing, 'other')
+
+
+def last_recipe():
+    try:
+        with open(RECIPE_FILE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def screen_mode(cfg, mode, minutes=30):
+    """Screen Control: put one mode up now, for `minutes` (a recipe: its usual time), over every
+    automatic rule; afterwards the rules decide again."""
+    if mode not in SCREEN_MODES:
+        raise ValueError(mode)
+    require_tv(cfg)
+    if mode == 'recipe':
+        rec = last_recipe()
+        if not rec:
+            raise RuntimeError('no recipe has been shown yet')
+        show_recipe(cfg, rec, notify=False)
+        log(f"Screen Control: recipe “{rec.get('name', '')[:40]}”")
+        return
+    until = time.time() + minutes * 60
+    woke = False
+    if not tv.awake(cfg['tv_ip']):
+        mac = load_state().get('tv_mac') or cfg.get('tv_mac')
+        woke = bool(mac) and tv.wake(cfg['tv_ip'], mac)
+        if not woke:
+            raise RuntimeError('the TV is asleep and did not wake up')
+    with lock:
+        st = load_state()
+        st.update(manual_until=until, manual_view={'plan': 'day', 'week': 'week'}.get(mode),
+                  bottle_override=False, bottle_prev=None, resume=None, hide_pending=False)
+        save_state(st)
+    if mode == 'art':
+        dismiss_severe(cfg)
+        restore(cfg)
+    elif mode in ('plan', 'week'):
+        show_plan(cfg, woke=woke, until=until, view='day' if mode == 'plan' else 'week')
+    else:
+        show_severe(cfg, woke=woke, until=until)
+    log(f'Screen Control: {mode} for {minutes} minutes')
+
+
+def clear_manual():
+    """A voice request replaces a Screen Control choice."""
+    with lock:
+        st = load_state()
+        if st.get('manual_until'):
+            st.update(manual_until=None, manual_view=None)
+            save_state(st)
+
+
 def show_for(cfg, minutes):
     """Show the plan now for `minutes` (a voice request): wake the TV if needed, then the scheduler
     keeps it fresh and puts the artwork back when the time is up (or at the end of the window)."""
     require_tv(cfg)
+    clear_manual()
     woke = False
     if not tv.awake(cfg['tv_ip']):
         mac = load_state().get('tv_mac') or cfg.get('tv_mac')
@@ -489,6 +565,7 @@ def hide(cfg):
     """Back to the artwork now (a voice request). Also dismisses severe weather monitoring. A sleeping TV is not woken: the artwork goes back
     the moment it wakes, before anyone sees the plan."""
     require_tv(cfg)
+    clear_manual()
     dismiss_severe(cfg)
     if tv.awake(cfg['tv_ip']):
         restore(cfg)
@@ -563,6 +640,7 @@ def show_severe(cfg, refresh=False, woke=False, until=None):
 def show_severe_for(cfg, minutes=None):
     """Asked for by voice: the monitoring screen now, for a while, whatever the triggers say."""
     require_tv(cfg)
+    clear_manual()
     minutes = minutes or int(severe.settings(cfg)['minutes'])
     woke = False
     if not tv.awake(cfg['tv_ip']):
@@ -644,6 +722,8 @@ def show_recipe(cfg, rec, minutes=None, notify=None, until=None):
         state = load_state()
         # notify=False: a guest's recipe; nobody's phone is told about it
         state['recipe_notify'] = None if notify is False else (notify or state.get('recipe_notify'))
+        # Someone asked for this recipe: it holds the screen for its time, even over the bottle rule.
+        state.update(manual_until=until, manual_view=None, bottle_override=False, bottle_prev=None, resume=None)
         save_state(state)
     tell_phone(cfg, state.get('recipe_notify'), f"{rec.get('name', 'Recipe')} is on the Frame until {until_text}")
 
@@ -662,12 +742,13 @@ def extend_recipe(cfg, minutes=30):
     show_recipe(cfg, rec, until=max(state.get('until') or 0, time.time()) + minutes * 60)
 
 
-def tell_phone(cfg, service, message):
+def tell_phone(cfg, service, message, actions=True):
     if not service or not ha.configured(cfg):
         return
     try:
-        ha.notify(service, message, cfg, title='Frame', data={
-            'tag': 'frame_recipe', 'actions': [{'action': k, 'title': v} for k, v in RECIPE_ACTIONS.items()]})
+        data = {'tag': 'frame_recipe', 'actions': [{'action': k, 'title': v} for k, v in RECIPE_ACTIONS.items()]} \
+            if actions else {'tag': 'frame_share_failed'}
+        ha.notify(service, message, cfg, title='Frame', data=data)
     except Exception as e:  # noqa: BLE001  the recipe still shows
         log(f'Could not notify the phone ({e})')
 
@@ -687,29 +768,39 @@ def on_share(data):
     cfg = config.load()
     rcfg = _recipe_cfg(cfg)
     text, caller = data.get('text') or '', data.get('caller') or ''
+    log(f"Share received from {caller.split('.')[-1] or 'the phone'}: {len(text)} characters"
+        + (f", link {data['url'][:60]}" if data.get('url') else ''))
     if not rcfg['enabled']:
+        log('Recipes are turned off in the settings: share ignored')
         return
-    if recipe.looks_like_recipe(text):
-        rec = recipe.parse(text)
-    else:
-        url = data.get('url') or recipe.first_url(text)
-        if not url:
-            if 'paprika' in caller:
-                log('Shared from Paprika, but not as Recipe Text: choose Share → Recipe Text')
-            return
-        try:
-            rec = recipe.from_url(url)
-        except Exception as e:  # noqa: BLE001  not a recipe page (or the site refused): say why, show nothing
-            log(f'Shared link not shown as a recipe ({e}): {url[:80]}')
-            return
     service = rcfg['notify'] or None
     if not service:
         try:
             service = ha.notify_service_for(data.get('device_id'), cfg)
         except Exception:  # noqa: BLE001
             service = None
-    log(f"Recipe shared: {rec['name']}")
-    show_recipe(cfg, rec, rcfg['minutes'], service)
+
+    def fail(why):
+        log(f'Share not shown: {why}')
+        tell_phone(cfg, service, f'Not shown on the Frame: {why}', actions=False)
+    try:
+        if recipe.looks_like_recipe(text):
+            rec = recipe.parse(text)
+            if not rec.get('ingredients') and not rec.get('steps'):
+                return fail('the recipe text had no ingredients or directions')
+        else:
+            url = data.get('url') or recipe.first_url(text)
+            if not url:
+                return fail('Paprika sent the recipe without its ingredients and directions; choose Share → '
+                            'Recipe Text' if 'paprika' in caller else 'no recipe or link in what was shared')
+            try:
+                rec = recipe.from_url(url)
+            except Exception as e:  # noqa: BLE001  not a recipe page (or the site refused): say why
+                return fail(f'{e} ({url[:60]})')
+        log(f"Recipe shared: {rec['name']}")
+        show_recipe(cfg, rec, rcfg['minutes'], service)
+    except Exception as e:  # noqa: BLE001
+        fail(f'{type(e).__name__}: {e}')
 
 
 def on_notification_action(data):

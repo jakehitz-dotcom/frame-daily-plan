@@ -27,9 +27,17 @@ META_KEYS = {'prep time': 'prep', 'cook time': 'cook', 'total time': 'total', 's
              'difficulty': 'difficulty', 'rating': 'rating'}
 
 
+HEADING = re.compile(r'(?im)^[ \t]*(ingredients|directions|instructions|method)[ \t]*:?[ \t]*$')
+
+
 def looks_like_recipe(text):
+    """Paprika's Recipe Text (and most pasted recipes): an Ingredients and a Directions heading, with or
+    without a colon (or the inline 'Ingredients:' form)."""
     t = (text or '').lower()
-    return 'ingredients:' in t and ('directions:' in t or 'instructions:' in t)
+    if 'ingredients:' in t and ('directions:' in t or 'instructions:' in t):
+        return True
+    heads = {m.group(1).lower() for m in HEADING.finditer(text or '')}
+    return 'ingredients' in heads and bool(heads & {'directions', 'instructions', 'method'})
 
 
 def parse(text):
@@ -44,7 +52,8 @@ def parse(text):
         if not line:
             continue
         head = line.rstrip(':').strip().lower()
-        if line.endswith(':') and head in SECTIONS + ('instructions', 'method'):
+        if head in SECTIONS + ('instructions', 'method') and (line.endswith(':') or head in
+                                                               ('ingredients', 'directions', 'instructions', 'method')):
             section = 'directions' if head in ('instructions', 'method') else head
             continue
         m = re.match(r'(?i)^source:\s*(\S+)', line)

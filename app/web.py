@@ -344,11 +344,36 @@ def _guest_now_showing(cfg):
     return name, until
 
 
+REMOTE_MODES = [  # (mode, icon, label, what it shows)
+    ('plan', '🗓️', 'Planner', 'Today, tomorrow, weather'),
+    ('week', '📆', 'Next 7 days', 'Starting tomorrow'),
+    ('weather', '🌧️', 'Weather', 'Radar, rain and wind'),
+    ('recipe', '🍳', 'Last recipe', ''),
+    ('art', '🖼️', 'Artwork', 'Back to the picture'),
+]
+MODE_NAMES = {'plan': 'the planner', 'week': 'the next 7 days', 'weather': 'the weather', 'recipe': 'a recipe',
+              'art': 'artwork', 'other': 'a message'}
+
+
 def _guest_page(tok, message=None, kind='', confirm=None, text='', status=200):
     cfg = config.load()
-    showing, until = _guest_now_showing(cfg)
+    state = jobs.load_state()
+    now_mode = jobs.current_mode(state)
+    tz = zoneinfo.ZoneInfo(cfg['timezone'])
+    held = max(state.get('manual_until') or 0, state.get('until') or 0)
+    until = datetime.datetime.fromtimestamp(held, tz).strftime('%-I:%M %p') if held > time.time() else None
+    last = jobs.last_recipe()
+    modes = []
+    for mode, icon, label, sub in REMOTE_MODES:
+        if mode == 'recipe':
+            if not last:
+                continue
+            sub = last.get('name') or 'Recipe'
+        modes.append({'mode': mode, 'icon': icon, 'label': label, 'sub': sub, 'on': mode == now_mode})
+    showing, _ = _guest_now_showing(cfg)
     return render_template('guest.html', base=f'/G/{tok.upper()}', message=message, kind=kind, confirm=confirm,
-                           text=text, showing=None if confirm else showing, until=until, stamp=int(time.time()),
+                           text=text, modes=modes, now_name=MODE_NAMES.get(now_mode, 'something'), until=until,
+                           thumb=now_mode != 'art', stamp=int(time.time()), recipe_showing=showing,
                            minutes=jobs._recipe_cfg(cfg)['minutes']), status
 
 
@@ -357,8 +382,30 @@ def _guest_page(tok, message=None, kind='', confirm=None, text='', status=200):
 def guest_home(tok):
     if not _guest_ok(tok):
         return _guest_gone()
-    msg = {'shown': ('It’s on the TV! 🎉', 'ok'), 'hidden': ('Taken off the TV.', 'ok')}.get(request.args.get('m'))
+    m = request.args.get('m') or ''
+    msg = {'shown': ('Your recipe is on the TV 🎉', 'ok'), 'hidden': ('Back to the artwork.', 'ok')}.get(m)
+    if m.startswith('mode-'):
+        msg = (f"Now showing {MODE_NAMES.get(m[5:], m[5:])} on the TV.", 'ok')
     return _guest_page(tok, *(msg or (None, '')))
+
+
+@app.post('/g/<tok>/mode')
+@app.post('/G/<tok>/mode')
+def guest_mode(tok):
+    if not _guest_ok(tok):
+        return _guest_gone()
+    mode = request.form.get('mode', '')
+    if mode not in jobs.SCREEN_MODES:
+        return _guest_page(tok, 'Unknown choice.', 'bad')
+    if time.time() - _guest_last[0] < 5:
+        return _guest_page(tok, 'One moment: the TV is still busy with the last request. Try again in a few seconds.', 'bad')
+    _guest_last[0] = time.time()
+    try:
+        jobs.screen_mode(config.load(), mode)
+    except Exception as e:  # noqa: BLE001
+        jobs.log(f'Frame Remote: {mode} failed ({e})')
+        return _guest_page(tok, f'The TV didn’t respond ({e}). Make sure it’s on, then try again.', 'bad')
+    return redirect(f'/G/{tok.upper()}?m=mode-{mode}')
 
 
 @app.post('/g/<tok>/show')
@@ -400,12 +447,10 @@ def guest_show(tok):
 def guest_hide(tok):
     if not _guest_ok(tok):
         return _guest_gone()
-    cfg = config.load()
-    if jobs.load_state().get('showing') == 'recipe':
-        try:
-            jobs.end_recipe(cfg)
-        except Exception as e:  # noqa: BLE001
-            return _guest_page(tok, f'Couldn’t reach the TV ({e}).', 'bad')
+    try:
+        jobs.screen_mode(config.load(), 'art')
+    except Exception as e:  # noqa: BLE001
+        return _guest_page(tok, f'Couldn’t reach the TV ({e}).', 'bad')
     return redirect(f'/G/{tok.upper()}?m=hidden')
 
 
@@ -421,6 +466,20 @@ def guest_tv(tok):
     im.convert('RGB').save(buf, 'JPEG', quality=80)
     buf.seek(0)
     return send_file(buf, mimetype='image/jpeg', max_age=0)
+
+
+@app.get('/log')
+@protected
+def full_log():
+    """The whole log file (the page shows only the latest lines); ?q= filters, e.g. /log?q=Share."""
+    try:
+        with open(jobs.LOG_FILE) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    q = (request.args.get('q') or '').lower()
+    lines = [ln for ln in lines if q in ln.lower()][-2000:]
+    return Response('\n'.join(reversed(lines)) + '\n', mimetype='text/plain; charset=utf-8')
 
 
 @app.get('/guest-qr.png')
