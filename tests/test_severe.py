@@ -234,3 +234,12 @@ def test_after_the_bottle_the_usual_screen_returns():
 
 def test_bottle_default_is_three_and_a_half_hours():
     assert not jobs.bottle_overdue(CFG, 209) and jobs.bottle_overdue(CFG, 210)
+
+
+def test_the_national_blend_replaces_hrrr_gust_spikes():
+    hourly = {'time': ['2026-11-07T03:00', '2026-11-07T04:00', '2026-11-07T05:00'],
+              'wind_gusts_10m': [22.4, 25.5, 34.0], 'precipitation_probability': [5, 5, 5]}
+    blend = {'wind_gusts_10m': {'2026-11-07T03:00': 10.1, '2026-11-07T04:00': 10.3, '2026-11-07T05:00': None}}
+    severe.prefer_blend(hourly, blend)
+    assert hourly['wind_gusts_10m'] == [10.1, 10.3, 34.0]        # a gap in the Blend keeps the original
+    assert hourly['precipitation_probability'] == [5, 5, 5]      # variables the Blend lacks are untouched

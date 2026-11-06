@@ -5,7 +5,8 @@ National Weather Service has any alert out for the house (thresholds are setting
 
 Sources (each with a fallback, so one outage never blanks the screen):
 - alerts: NWS active alerts for the point
-- hourly rain %, rain amount, wind and gusts: Open-Meteo hourly (fallback: the NWS forecast grid)
+- hourly rain %, rain amount, wind and gusts: NOAA's National Blend of Models via Open-Meteo, filling any gaps
+  from Open-Meteo's default model (fallback: the NWS forecast grid)
 - minutes until rain: Open-Meteo 15-minute forecast (HRRR in the US); fallback: the hourly forecast
 - current conditions: the planner's own numbers (NWS grid cell) so both screens agree
 - radar: see radar.py
@@ -40,6 +41,37 @@ def _cached(key, fn, fresh=FRESH):
     return value
 
 
+BLEND = 'ncep_nbm_conus'   # NOAA's National Blend of Models: what NWS forecasts are built from
+
+
+def _blend(lat, lon, tz_name, hourly, extra):
+    """The National Blend's hourly values by time ({var: {time: value}}), or {} outside the US / offline."""
+    params = dict({'latitude': lat, 'longitude': lon, 'timezone': tz_name, 'wind_speed_unit': 'mph',
+                   'precipitation_unit': 'inch', 'temperature_unit': 'fahrenheit', 'hourly': hourly,
+                   'models': BLEND}, **extra)
+    try:
+        url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode(params)
+        h = json.load(urllib.request.urlopen(url, timeout=20)).get('hourly') or {}
+    except Exception as e:  # noqa: BLE001  the single-model forecast still stands
+        print('National Blend unavailable:', e, file=sys.stderr)
+        return {}
+    times = h.get('time') or []
+    return {k: dict(zip(times, v)) for k, v in h.items() if k != 'time' and isinstance(v, list)}
+
+
+def prefer_blend(om_hourly, blend):
+    """Replace single-model hourly values with the National Blend's wherever it has one. Open-Meteo's
+    default for the US is the HRRR model for the first two days, whose raw gusts can spike to 2-3 times
+    every other forecast (e.g. 26 mph at 4 AM against 10 mph from the Blend, ECMWF and NWS)."""
+    for key, by_time in blend.items():
+        base = key.replace('_' + BLEND, '')
+        if base not in om_hourly:
+            continue
+        om_hourly[base] = [by_time.get(t) if by_time.get(t) is not None else v
+                           for t, v in zip(om_hourly['time'], om_hourly[base])]
+    return om_hourly
+
+
 def open_meteo(lat, lon, tz_name):
     """Current, hourly (48 h) and 15-minute (24 h) forecast in °F, mph and inches."""
     base = {'latitude': lat, 'longitude': lon, 'timezone': tz_name, 'temperature_unit': 'fahrenheit',
@@ -54,10 +86,17 @@ def open_meteo(lat, lon, tz_name):
     for params in attempts:
         try:
             url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode(params)
-            return json.load(urllib.request.urlopen(url, timeout=20))
+            om = json.load(urllib.request.urlopen(url, timeout=20))
+            break
         except Exception as e:  # noqa: BLE001
             last = e
-    raise last
+    else:
+        raise last
+    # Hourly rain chance, amounts, wind and gusts from the National Blend (the 15-minute rain stays HRRR,
+    # the best short-range rain timing there is).
+    if om.get('hourly'):
+        prefer_blend(om['hourly'], _blend(lat, lon, tz_name, base['hourly'], {'forecast_hours': 48}))
+    return om
 
 
 def week_ahead(cfg, now=None):
@@ -72,7 +111,11 @@ def week_ahead(cfg, now=None):
                   'wind_speed_unit': 'mph', 'precipitation_unit': 'inch', 'forecast_days': 8,
                   'hourly': 'precipitation,wind_gusts_10m'}
         url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode(params)
-        return json.load(urllib.request.urlopen(url, timeout=20))
+        om = json.load(urllib.request.urlopen(url, timeout=20))
+        if om.get('hourly'):
+            prefer_blend(om['hourly'], _blend(loc['lat'], loc['lon'], cfg['timezone'], params['hourly'],
+                                              {'forecast_days': 8}))
+        return om
     h = _cached(('week', round(loc['lat'], 3), round(loc['lon'], 3)), fetch, 1800).get('hourly') or {}
     end = now + datetime.timedelta(days=7)
     rain = gust = 0.0
