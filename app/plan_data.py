@@ -367,7 +367,7 @@ def build(cfg, now):
     events_tomorrow.sort(key=lambda e: e['sort'])
     for e in events:
         e['past'] = bool(cfg.get('dim_past_events')) and e['end_dt'] is not None and e['end_dt'] <= now
-    if flights.configured(cfg):  # flight status under each flight on the calendar
+    if flights.configured(cfg) and flights.someone_home(cfg):  # flight status under each flight on the calendar
         for day, evs in ((today, events), (tomorrow, events_tomorrow)):
             for e in evs:
                 ident = flights.find_ident(e['title'])

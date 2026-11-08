@@ -95,3 +95,23 @@ def test_tracker_screen_renders_offline(monkeypatch, tmp_path):
           'path': [], 'total_mi': 862, 'flown_mi': 500, 'progress': 58, 'minutes_left': 52, 'updated': '7:32 PM'}
     render.render_flight(fd, str(tmp_path / 'f.jpg'))
     assert (tmp_path / 'f.jpg').stat().st_size > 50_000
+
+
+def test_nothing_is_looked_up_while_nobody_is_home(monkeypatch):
+    import ha
+    flights._cache.clear()
+    states = {'device_tracker.life360_jake_hitzeroth': 'not_home', 'device_tracker.life360_mike_schmer': 'Work'}
+    monkeypatch.setattr(ha, 'configured', lambda cfg: True)
+    monkeypatch.setattr(ha, 'state', lambda e, cfg: {'state': states[e]})
+    called = []
+    monkeypatch.setattr(flights, 'calendar_flights', lambda cfg, now: called.append(1) or [])
+    assert not flights.someone_home(CFG) and flights.active(CFG) is None and not called
+    flights._cache.clear()
+    states['device_tracker.life360_mike_schmer'] = 'home'
+    assert flights.someone_home(CFG)
+    flights.active(CFG)
+    assert called
+    flights._cache.clear()
+    states.update({k: 'unavailable' for k in states})
+    assert flights.someone_home(CFG)                     # Home Assistant can't say: assume someone is
+    flights._cache.clear()

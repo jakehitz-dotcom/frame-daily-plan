@@ -29,7 +29,9 @@ AEROAPI = 'https://aeroapi.flightaware.com/aeroapi'
 ADSB = 'https://api.airplanes.live/v2/callsign/{}'
 HEADERS = {'User-Agent': 'frame-daily-plan (github.com/jakehitz-dotcom/frame-daily-plan)'}
 AIRPORTS = os.path.join(config.DATA, 'airports.json')
-DEFAULTS = {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20}
+DEFAULTS = {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20,
+            # Automatic look-ups only while one of these is home (nobody to see the TV otherwise)
+            'presence': ['device_tracker.life360_jake_hitzeroth', 'device_tracker.life360_mike_schmer']}
 # "(UA 1234)", "(UA1234)", "(B6 523)"; or "Flight … AS 1234" without brackets
 IDENT_BRACKETS = re.compile(r'\(\s*([A-Z][A-Z0-9]|[A-Z0-9][A-Z])\s?(\d{1,4})\s*\)')
 IDENT_FREE = re.compile(r'\b([A-Z][A-Z0-9]|[A-Z0-9][A-Z])\s?(\d{1,4})\b')
@@ -44,6 +46,28 @@ def settings(cfg):
 def configured(cfg):
     s = settings(cfg)
     return bool(s['enabled'] and s['aeroapi_key'])
+
+
+def someone_home(cfg):
+    """True when any presence entity is 'home' in Home Assistant (checked once a minute). If Home
+    Assistant cannot say, assume someone is: better a few cents than a missed flight."""
+    import ha
+    entities = settings(cfg).get('presence') or []
+    if not entities or not ha.configured(cfg):
+        return True
+
+    def check():
+        known = False
+        for e in entities:
+            try:
+                st = ha.state(e, cfg).get('state')
+            except Exception:  # noqa: BLE001
+                continue
+            if st == 'home':
+                return True
+            known = known or st not in (None, 'unknown', 'unavailable')
+        return not known
+    return _cached(('home',), 60, check)
 
 
 def find_ident(title, *more):
@@ -231,7 +255,7 @@ def in_air(cfg, fl, now):
 
 def active(cfg, now=None):
     """The calendar flight being flown right now (its AeroAPI flight plus the calendar entry), or None."""
-    if not configured(cfg):
+    if not configured(cfg) or not someone_home(cfg):
         return None
     now = now or datetime.datetime.now(datetime.timezone.utc)
     for cf in calendar_flights(cfg, now):
