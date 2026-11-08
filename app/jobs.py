@@ -416,10 +416,14 @@ def tick(cfg, now, memo):
                 print('flight check:', e, file=sys.stderr)
             memo['flight_at'] = time.time()
         flight = memo.get('flight')
+    try:  # a watched aircraft in the air comes first (free ADS-B, once a minute; no FlightAware key needed)
+        flight = flights.tail_active(cfg) or flight
+    except Exception as e:  # noqa: BLE001
+        print('tail watch:', e, file=sys.stderr)
     action = _due(cfg, state, now, sev, bottle, flight)
     if flight and state.get('showing') == 'flight' and action is None and not (
             (state.get('manual_until') or 0) > now.timestamp() and state.get('flight_id') != flight['flight'].get('fa_flight_id')):
-        word = flights.status(flight['flight'])[0]
+        word = flights.status(flight['flight'])[0] if flight.get('kind') != 'tail' else state.get('flight_status')
         if memo.pop('flight_force', False) or (state.get('flight_status') and word != state.get('flight_status')):
             action = 'flight_refresh'  # departed, took off, landed, delayed…: update the screen right away
     memo.pop('flight_force', None)
@@ -442,8 +446,8 @@ def tick(cfg, now, memo):
             ss = severe.settings(cfg)
             window = f"severe:{now.date().isoformat()}:{(sev or {}).get('signature')}" \
                 if ss['wake'] and not severe.in_quiet_hours(cfg, now) else None
-        if action == 'flight':  # once per flight, at pushback, not in the night's quiet hours
-            window = f"flight:{flight['flight'].get('fa_flight_id')}" \
+        if action == 'flight':  # once per flight (or watched aircraft's trip), not in the night's quiet hours
+            window = f"flight:{flight['flight'].get('fa_flight_id')}:{(flight.get('state') or {}).get('since') or ''}" \
                 if flights.settings(cfg)['wake'] and not severe.in_quiet_hours(cfg, now) else None
         # The TV is woken once per window, at its start, and never again in it: refreshes, the end of
         # the window and a failed wake-up all wait for motion to wake the TV. Recorded in the state file,
@@ -572,7 +576,7 @@ def screen_mode(cfg, mode, minutes=30):
     elif mode in ('plan', 'week'):
         show_plan(cfg, woke=woke, until=until, view='day' if mode == 'plan' else 'week')
     elif mode == 'flight':
-        found = flights.next_flight(cfg)
+        found = flights.tail_active(cfg) or flights.next_flight(cfg)
         if not found:
             raise RuntimeError('no flight on the calendar today or tomorrow')
         show_flight(cfg, found, woke=woke, until=until)
@@ -663,13 +667,16 @@ def watch_flight(cfg, memo, now):
 
 def show_flight(cfg, found, refresh=False, woke=False, until=None):
     def make(a, state):
-        render.render_flight(flights.screen(cfg, found), LAST_IMAGE)
+        if found.get('kind') == 'tail':
+            render.render_tail(flights.tail_screen(cfg, found), LAST_IMAGE)
+        else:
+            render.render_flight(flights.screen(cfg, found), LAST_IMAGE)
     put_temporary(cfg, make, 'Flight tracker updated' if refresh else f"Flight tracker: {found['calendar']['ident']}",
                   kind='flight', only_if_changed=refresh, woke=woke, until=until)
     with lock:
         st = load_state()
         st['flight_id'] = found['flight'].get('fa_flight_id')
-        st['flight_status'] = flights.status(found['flight'])[0]
+        st['flight_status'] = flights.status(found['flight'])[0] if found.get('kind') != 'tail' else 'airborne'
         save_state(st)
 
 

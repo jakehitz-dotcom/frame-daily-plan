@@ -179,3 +179,30 @@ def test_a_phase_change_needs_two_looks_then_forces_a_refresh(monkeypatch):
         jobs.watch_flight(CFG, memo, NOW)
         assert not refreshed or memo.get('flight_force')
     assert refreshed == [1] and memo['phase'] == 'taxiing'
+
+
+def test_a_watched_aircraft_in_the_air_is_found_and_tracked(monkeypatch):
+    flights._tails.clear()
+    flights._cache.clear()
+    monkeypatch.setattr(flights, 'someone_home', lambda cfg: True)
+    fixes = iter([{'lat': 33.9, 'lon': -118.2, 'alt_baro': 3000, 'gs': 105, 'track': 280, 't': 'C172'},
+                  {'lat': 33.95, 'lon': -118.3, 'alt_baro': 4500, 'gs': 110, 'track': 285, 't': 'C172'},
+                  {'lat': 33.97, 'lon': -118.4, 'alt_baro': 'ground', 'gs': 12},
+                  {'lat': 33.97, 'lon': -118.4, 'alt_baro': 'ground', 'gs': 0}])
+    monkeypatch.setattr(flights, '_adsb_reg', lambda tail: ('adsb.lol', next(fixes)))
+    cfg = dict(CFG, weather={'lat': 33.773, 'lon': -118.36})
+    t0 = 1_800_000_000
+    found = flights.tail_active(cfg, t0)
+    assert found['tail'] == 'N8333X' and found['flight']['fa_flight_id'] == 'tail:N8333X'
+    flights.tail_active(cfg, t0 + 60)
+    scr = flights.tail_screen(cfg, found)
+    assert len(scr['path']) == 2 and scr['max_alt'] == 4500 and scr['from_home_dir'] in ('N', 'NE', 'NW')
+    assert flights.tail_active(cfg, t0 + 120) is not None              # just landed: kept a few minutes
+    assert flights.tail_active(cfg, t0 + 60 + 241) is None             # then off the screen
+    flights._tails.clear()
+
+
+def test_a_watched_aircraft_outranks_a_calendar_flight_on_screen():
+    tail = {'kind': 'tail', 'flight': {'fa_flight_id': 'tail:N8333X'}, 'calendar': {'ident': 'N8333X'}, 'state': {}}
+    up = {'showing': 'flight', 'flight_id': 'UAL1234-1-0', 'shown_at': NOW.timestamp()}
+    assert jobs._due(CFG, up, NOW, None, flight=tail) == 'flight'       # switches from the airliner to the Cessna

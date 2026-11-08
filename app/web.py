@@ -379,10 +379,15 @@ def _guest_page(tok, message=None, kind='', confirm=None, text='', status=200):
             sub = last.get('name') or 'Recipe'
         if mode == 'flight':
             try:
-                found = flights.next_flight(cfg) if flights.configured(cfg) else None
+                tail = flights.tail_active(cfg)
+                found = tail or (flights.next_flight(cfg) if flights.configured(cfg) else None)
             except Exception:  # noqa: BLE001
                 found = None
             if not found:
+                continue
+            if found.get('kind') == 'tail':
+                modes.append({'mode': mode, 'icon': icon, 'label': 'Flight · live', 'sub': found['label'],
+                              'on': mode == now_mode})
                 continue
             f = found['flight']
             sub = f"{flights.pretty_ident(f.get('ident_iata') or found['calendar']['ident'])}  ·  " \

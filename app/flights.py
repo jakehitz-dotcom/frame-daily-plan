@@ -33,7 +33,9 @@ HEADERS = {'User-Agent': 'frame-daily-plan (github.com/jakehitz-dotcom/frame-dai
 AIRPORTS = os.path.join(config.DATA, 'airports.json')
 DEFAULTS = {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20,
             # Automatic look-ups only while one of these is home (nobody to see the TV otherwise)
-            'presence': ['device_tracker.life360_jake_hitzeroth', 'device_tracker.life360_mike_schmer']}
+            'presence': ['device_tracker.life360_jake_hitzeroth', 'device_tracker.life360_mike_schmer'],
+            # Aircraft shown whenever they are in the air, ahead of calendar flights (free ADS-B only)
+            'watch_tails': [{'tail': 'N8333X', 'label': "Mark's Cessna 172"}]}
 # "(UA 1234)", "(UA1234)", "(B6 523)"; or "Flight … AS 1234" without brackets
 IDENT_BRACKETS = re.compile(r'\(\s*([A-Z][A-Z0-9]|[A-Z0-9][A-Z])\s?(\d{1,4})\s*\)')
 IDENT_FREE = re.compile(r'\b([A-Z][A-Z0-9]|[A-Z0-9][A-Z])\s?(\d{1,4})\b')
@@ -491,3 +493,87 @@ def screen(cfg, found, now=None):
         'filed_alt': (fl.get('filed_altitude') or 0) * 100 or None,
         'updated': now.astimezone(home_tz).strftime('%-I:%M %p'),
     }
+
+
+# ── Watched aircraft (by tail number) ───────────────────────────────────────────────────────────
+TAIL_POLL = 60          # seconds between free ADS-B looks
+TAIL_GONE = 240         # no airborne fix for this long: landed, or out of range
+_tails = {}             # tail -> {'trail': [(lat, lon, alt)], 'since', 'last_air', 'ac', 'polled'}
+
+
+def _adsb_reg(tail):
+    for name, _, by_reg in ADSB:
+        try:
+            r = requests.get(by_reg.format(tail), headers=HEADERS, timeout=10)
+            r.raise_for_status()
+            for a in r.json().get('ac') or []:
+                if a.get('lat') is not None and not (abs(a['lat']) < 1 and abs(a['lon']) < 1):
+                    return name, a
+            return name, None
+        except Exception as e:  # noqa: BLE001
+            print('flights: tail', name, tail, e, file=sys.stderr)
+    return None, None
+
+
+def _airborne(a):
+    alt = a.get('alt_baro')
+    return alt != 'ground' and (not isinstance(alt, (int, float)) or alt > 200 or (a.get('gs') or 0) > 45)
+
+
+def tail_active(cfg, now_ts=None):
+    """The first watched aircraft in the air right now, as a tracker 'found' record, or None.
+    Each aircraft is looked up once a minute; its path is collected while it flies."""
+    s = settings(cfg)
+    if not s['enabled'] or not s.get('watch_tails') or not someone_home(cfg):
+        return None
+    now_ts = now_ts or time.time()
+    for w in s['watch_tails']:
+        tail = (w.get('tail') or '').upper().strip()
+        if not tail:
+            continue
+        t = _tails.setdefault(tail, {'trail': [], 'since': None, 'last_air': 0, 'ac': None, 'polled': 0, 'source': None})
+        if now_ts - t['polled'] >= TAIL_POLL:
+            t['polled'] = now_ts
+            name, a = _adsb_reg(tail)
+            if a and _airborne(a):
+                if now_ts - t['last_air'] > 1800:      # a new flight: start a fresh path
+                    t.update(trail=[], since=now_ts)
+                t.update(last_air=now_ts, ac=a, source=name)
+                alt = a.get('alt_baro') if isinstance(a.get('alt_baro'), (int, float)) else 0
+                if not t['trail'] or (t['trail'][-1][0], t['trail'][-1][1]) != (a['lat'], a['lon']):
+                    t['trail'].append((a['lat'], a['lon'], alt))
+        if t['ac'] and now_ts - t['last_air'] <= TAIL_GONE:
+            return {'kind': 'tail', 'tail': tail, 'label': w.get('label') or tail, 'state': t,
+                    'flight': {'fa_flight_id': f'tail:{tail}'}, 'calendar': {'ident': tail}}
+    return None
+
+
+def tail_screen(cfg, found, now=None):
+    """What the tracker shows for a watched aircraft: no schedule, just where it is and how it flies."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    home_tz = zoneinfo.ZoneInfo(cfg['timezone'])
+    t, a = found['state'], found['state']['ac']
+    trail = [(la, lo) for la, lo, _ in t['trail']]
+    home = cfg.get('weather') or {}
+    here = (home['lat'], home['lon']) if home.get('lat') is not None else None
+    pos = {'lat': a['lat'], 'lon': a['lon'],
+           'alt_ft': a['alt_baro'] if isinstance(a.get('alt_baro'), (int, float)) else 0,
+           'gs_mph': round(a['gs'] * 1.15078) if a.get('gs') is not None else None,
+           'tas_mph': round(a['tas'] * 1.15078) if a.get('tas') is not None else None,
+           'heading': a.get('track') or a.get('true_heading') or 0,
+           'vrate': a.get('baro_rate') or a.get('geom_rate') or 0, 'source': t.get('source') or 'ADS-B'}
+    dist = bearing = None
+    if here:
+        dist = miles(here, (a['lat'], a['lon']))
+        y = math.sin(math.radians(a['lon'] - here[1])) * math.cos(math.radians(a['lat']))
+        x = math.cos(math.radians(here[0])) * math.sin(math.radians(a['lat'])) - \
+            math.sin(math.radians(here[0])) * math.cos(math.radians(a['lat'])) * math.cos(math.radians(a['lon'] - here[1]))
+        bearing = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][round((math.degrees(math.atan2(y, x)) % 360) / 45) % 8]
+    flown = sum(miles(p, q) for p, q in zip(trail, trail[1:]))
+    return {'kind': 'tail', 'label': found['label'], 'tail': found['tail'], 'aircraft': a.get('t') or '',
+            'callsign': (a.get('flight') or '').strip(), 'position': pos, 'path': trail, 'home': here,
+            'from_home_mi': round(dist) if dist is not None else None, 'from_home_dir': bearing,
+            'since': datetime.datetime.fromtimestamp(t['since'], home_tz).strftime('%-I:%M %p') if t.get('since') else None,
+            'minutes_up': round((time.time() - t['since']) / 60) if t.get('since') else None,
+            'flown_mi': round(flown), 'max_alt': max((al for _, _, al in t['trail']), default=0),
+            'squawk': a.get('squawk'), 'updated': now.astimezone(home_tz).strftime('%-I:%M %p')}

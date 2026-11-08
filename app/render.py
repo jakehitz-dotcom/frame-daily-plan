@@ -1446,3 +1446,114 @@ def render_flight(fd, out):
     d.text((W - m, H - 40), 'Flight data FlightAware  ·  Live position adsb.lol / adsb.fi (ADS-B, ODbL)  ·  Map © Esri, HERE, Garmin, © OpenStreetMap contributors',
            font=font(30, 'Medium'), fill=(112, 115, 122), anchor='rs')
     Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=92)
+
+
+def render_tail(td, out):
+    """A watched aircraft in the air (no schedule): where it is, its path so far, and its live numbers."""
+    global L
+    L = LABELS['en']
+    import flights as fl_mod
+    import radar
+    bg = Image.new('RGBA', (W, H), SV_BG + (255,))
+    grid = ImageDraw.Draw(bg)
+    for gx in range(0, W, 96):
+        grid.line([(gx, 0), (gx, H)], fill=(14, 22, 34, 255), width=1)
+    for gy in range(0, H, 96):
+        grid.line([(0, gy), (W, gy)], fill=(14, 22, 34, 255), width=1)
+    layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    txt = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d, ld = ImageDraw.Draw(txt), ImageDraw.Draw(layer)
+    m = 100
+    pos = td['position']
+
+    # Header
+    _plane(d, m + 50, 116, 45, 46, SV_CYAN, SV_CYAN)
+    d.text((m + 120, 58), td['label'], font=font(96, 'Bold'), fill=CREAM)
+    sub = '  ·  '.join(p for p in (td['tail'], td.get('aircraft'), td.get('callsign') if td.get('callsign') != td['tail'] else None) if p)
+    d.text((m + 124, 176), sub, font=font(40, 'Medium'), fill=DIM)
+    chip, f = 'AIRBORNE', font(48, 'DemiBold')
+    tw = d.textlength(chip, font=f)
+    ld.rounded_rectangle((W - m - tw - 70, 76, W - m, 160), radius=42, fill=SV_GREEN + (40,), outline=SV_GREEN + (255,), width=3)
+    d.text((W - m - tw / 2 - 35, 118), chip, font=f, fill=SV_GREEN, anchor='mm')
+
+    # Map: the path so far, the aircraft, and home when it is not too far away
+    mbox = (m, 250, 2690, H - 110)
+    sv_panel(layer, mbox)
+    inner = (mbox[0] + 14, mbox[1] + 14, mbox[2] - 14, mbox[3] - 14)
+    iw, ih = inner[2] - inner[0], inner[3] - inner[1]
+    here = td.get('home')
+    show_home = here and (td.get('from_home_mi') or 0) <= 120
+    pts = (td.get('path') or []) + [(pos['lat'], pos['lon'])] + ([here] if show_home else [])
+    if len(pts) == 1:  # one fix: frame about 25 miles around it
+        pts += [(pos['lat'] + 0.3, pos['lon'] + 0.35), (pos['lat'] - 0.3, pos['lon'] - 0.35)]
+    view = radar.map_view(pts, iw, ih, pad=0.18)
+    img, P = view['base'], view['project']
+    path = (td.get('path') or []) + [(pos['lat'], pos['lon'])]
+    if len(path) > 1:
+        line = [P(*p) for p in path]
+        glow = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+        ImageDraw.Draw(glow).line(line, fill=SV_CYAN + (120,), width=22, joint='curve')
+        img.alpha_composite(glow.filter(ImageFilter.GaussianBlur(8)))
+        ImageDraw.Draw(img).line(line, fill=SV_CYAN + (255,), width=8, joint='curve')
+    radar.overlay_geography(img, view)
+    top = ImageDraw.Draw(img)
+    if show_home:
+        hx, hy = P(*here)
+        top.ellipse((hx - 22, hy - 22, hx + 22, hy + 22), fill=SV_BG + (255,), outline=SV_AMBER + (255,), width=6)
+        top.ellipse((hx - 8, hy - 8, hx + 8, hy + 8), fill=SV_AMBER + (255,))
+        lf = font(48, 'Bold')
+        lw = top.textlength('HOME', font=lf)
+        top.rounded_rectangle((hx + 34, hy - 38, hx + 74 + lw, hy + 38), radius=18, fill=(6, 10, 18, 220), outline=SV_EDGE, width=3)
+        top.text((hx + 54, hy), 'HOME', font=lf, fill=SV_AMBER, anchor='lm')
+    px, py = P(pos['lat'], pos['lon'])
+    halo = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+    ImageDraw.Draw(halo).ellipse((px - 90, py - 90, px + 90, py + 90), fill=SV_CYAN + (90,))
+    img.alpha_composite(halo.filter(ImageFilter.GaussianBlur(24)))
+    _plane(ImageDraw.Draw(img), px, py, pos.get('heading'), 56, CREAM + (255,), SV_BG + (255,))
+    mask = Image.new('L', (iw, ih), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, iw, ih), radius=20, fill=255)
+    layer.paste(img, inner[:2], mask)
+    live = f"LIVE  ·  {pos.get('source')}"
+    cw_ = d.textlength(live, font=font(40, 'DemiBold'))
+    ld.rounded_rectangle((inner[0] + 26, inner[1] + 26, inner[0] + 130 + cw_, inner[1] + 110), radius=40, fill=(6, 10, 18, 215))
+    d.ellipse((inner[0] + 56, inner[1] + 56, inner[0] + 80, inner[1] + 80), fill=SV_GREEN)
+    d.text((inner[0] + 100, inner[1] + 68), live, font=font(40, 'DemiBold'), fill=SOFT, anchor='lm')
+
+    # Rail
+    rx0, rx1 = 2740, W - m
+    sv_panel(layer, (rx0, 250, rx1, 690), 'WHERE', d, SV_AMBER)
+    if td.get('from_home_mi') is not None:
+        d.text((rx0 + 48, 330), f"{td['from_home_mi']} mi", font=font(110, 'Bold'), fill=CREAM)
+        d.text((rx0 + 52, 470), f"{td.get('from_home_dir')} of home", font=font(52, 'DemiBold'), fill=SOFT)
+    d.text((rx0 + 52, 560), f"{pos['lat']:.3f}°, {pos['lon']:.3f}°", font=font(40, 'Medium'), fill=DIM)
+    if td.get('squawk'):
+        d.text((rx0 + 52, 612), f"squawk {td['squawk']}", font=font(40, 'Medium'),
+               fill=SV_RED if td['squawk'] in ('7500', '7600', '7700') else DIM)
+
+    sv_panel(layer, (rx0, 720, rx1, 1300), 'LIVE', d, SV_CYAN)
+    vr = pos.get('vrate') or 0
+    cells = [('ALTITUDE', f"{int(pos['alt_ft']):,} ft"),
+             ('GROUND SPEED', f"{pos['gs_mph']} mph" if pos.get('gs_mph') is not None else '–'),
+             ('HEADING', f"{round(pos.get('heading') or 0)}°  {['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][round((pos.get('heading') or 0) / 45) % 8]}"),
+             ('CLIMB', ('level' if abs(vr) < 200 else f"{'+' if vr > 0 else '–'}{abs(int(vr)):,} ft/min"))]
+    cw = (rx1 - rx0 - 100) / 2
+    for i, (label, value) in enumerate(cells):
+        cx, cy = rx0 + 50 + (i % 2) * cw, 830 + (i // 2) * 220
+        d.text((cx, cy), label, font=font(34, 'DemiBold'), fill=DIM)
+        d.text((cx, cy + 50), value, font=font(64, 'Bold'),
+               fill=(SV_GREEN if vr > 200 else SV_AMBER if vr < -200 else CREAM) if label == 'CLIMB' else CREAM)
+
+    sv_panel(layer, (rx0, 1330, rx1, H - 110), 'THIS FLIGHT', d, SV_BLUE)
+    rows = [('Airborne since', td.get('since') or '–'),
+            ('Time up', _hm(td['minutes_up']) if td.get('minutes_up') is not None else '–'),
+            ('Distance flown', f"{td.get('flown_mi') or 0:,} mi"),
+            ('Highest', f"{int(td.get('max_alt') or 0):,} ft")]
+    for i, (k, v) in enumerate(rows):
+        y = 1440 + i * 120
+        d.text((rx0 + 52, y), k, font=font(44, 'Medium'), fill=DIM)
+        d.text((rx1 - 52, y - 6), v, font=font(56, 'Bold'), fill=CREAM, anchor='ra')
+
+    d.text((m, H - 40), f"Updated at {td['updated']}", font=font(30, 'Medium'), fill=(112, 115, 122), anchor='ls')
+    d.text((W - m, H - 40), 'Live position adsb.lol / adsb.fi (ADS-B, ODbL)  ·  Map © Esri, HERE, Garmin, © OpenStreetMap contributors',
+           font=font(30, 'Medium'), fill=(112, 115, 122), anchor='rs')
+    Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=92)
