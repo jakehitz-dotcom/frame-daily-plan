@@ -206,3 +206,15 @@ def test_a_watched_aircraft_outranks_a_calendar_flight_on_screen():
     tail = {'kind': 'tail', 'flight': {'fa_flight_id': 'tail:N8333X'}, 'calendar': {'ident': 'N8333X'}, 'state': {}}
     up = {'showing': 'flight', 'flight_id': 'UAL1234-1-0', 'shown_at': NOW.timestamp()}
     assert jobs._due(CFG, up, NOW, None, flight=tail) == 'flight'       # switches from the airliner to the Cessna
+
+
+def test_flightaware_is_asked_less_often_once_airborne(monkeypatch):
+    asked = []
+    airborne = fl(actual_out='2026-11-09T02:10:00Z', actual_off='2026-11-09T02:25:00Z')
+    monkeypatch.setattr(flights, '_api', lambda cfg, path, params=None, fresh=0: asked.append(fresh) or {'flights': [airborne]})
+    start = datetime.datetime(2026, 11, 8, 18, 5, tzinfo=TZ)
+    flights._cruising.discard('UA1234')
+    flights.flight_for(CFG, 'UA1234', start, NOW)
+    flights.flight_for(CFG, 'UA1234', start, NOW)
+    assert asked == [300, 1200]
+    flights._cruising.discard('UA1234')

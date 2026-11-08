@@ -40,6 +40,8 @@ DEFAULTS = {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_min
 IDENT_BRACKETS = re.compile(r'\(\s*([A-Z][A-Z0-9]|[A-Z0-9][A-Z])\s?(\d{1,4})\s*\)')
 IDENT_FREE = re.compile(r'\b([A-Z][A-Z0-9]|[A-Z0-9][A-Z])\s?(\d{1,4})\b')
 _cache = {}
+_cruising = set()   # idents FlightAware last reported airborne (status re-checked every 20 min)
+_paths = {}        # fa_flight_id -> ADS-B fixes collected while showing the flight
 _lock = threading.Lock()
 
 
@@ -157,13 +159,22 @@ def flight_for(cfg, ident, start, now=None):
     day = start.astimezone(datetime.timezone.utc).date()
     params = {'start': (day - datetime.timedelta(days=1)).isoformat(),
               'end': (day + datetime.timedelta(days=2)).isoformat()}
-    flights = _api(cfg, f'/flights/{ident}', params, fresh=300 if soon else 1800).get('flights') or []
+    # Airborne, the status hardly changes: every 20 minutes (takeoff, landing and arrival are caught at once by
+    # the free ADS-B watch, which forces a fresh look). Near departure every 5, otherwise every 30 minutes.
+    fresh = 1200 if ident in _cruising else 300 if soon else 1800
+    flights = _api(cfg, f'/flights/{ident}', params, fresh=fresh).get('flights') or []
     flights = [f for f in flights if f.get('scheduled_out') or f.get('scheduled_off')]
     if not flights:
         return None
     best = min(flights, key=lambda f: abs((_t(f.get('scheduled_out') or f['scheduled_off']) - start).total_seconds()))
     sched = _t(best.get('scheduled_out') or best['scheduled_off'])
-    return best if abs((sched - start).total_seconds()) < 12 * 3600 else None
+    if abs((sched - start).total_seconds()) >= 12 * 3600:
+        return None
+    if best.get('actual_off') and not (best.get('actual_on') or best.get('actual_in')):
+        _cruising.add(ident)
+    else:
+        _cruising.discard(ident)
+    return best
 
 
 def airport(cfg, ap):
@@ -377,6 +388,9 @@ def live_position(cfg, fl):
     """{'lat', 'lon', 'alt_ft', 'gs_mph', 'tas_mph', 'heading', 'vrate', 'source', 'at'} or None."""
     name, a = _adsb(cfg, fl)
     if a:
+        trail = _paths.setdefault(fl.get('fa_flight_id'), [])
+        if not trail or trail[-1] != (a['lat'], a['lon']):
+            trail.append((a['lat'], a['lon']))
         alt = a.get('alt_baro')
         return {'lat': a['lat'], 'lon': a['lon'], 'alt_ft': alt if isinstance(alt, (int, float)) else 0,
                 'gs_mph': round(a['gs'] * 1.15078) if a.get('gs') is not None else None,
@@ -385,7 +399,7 @@ def live_position(cfg, fl):
                 'vrate': a.get('baro_rate') or a.get('geom_rate') or 0,
                 'source': name, 'at': time.time() - (a.get('seen_pos') or 0)}
     try:
-        p = _api(cfg, f"/flights/{fl['fa_flight_id']}/position", fresh=240).get('last_position') or {}
+        p = _api(cfg, f"/flights/{fl['fa_flight_id']}/position", fresh=600).get('last_position') or {}
         if plausible(cfg, fl, p.get('latitude'), p.get('longitude')):
             return {'lat': p['latitude'], 'lon': p['longitude'], 'alt_ft': (p.get('altitude') or 0) * 100,
                     'gs_mph': round((p.get('groundspeed') or 0) * 1.15078), 'tas_mph': None,
@@ -399,11 +413,13 @@ def live_position(cfg, fl):
 
 def track(cfg, fl):
     try:
-        pts = _api(cfg, f"/flights/{fl['fa_flight_id']}/track", fresh=900).get('positions') or []
-        return [(p['latitude'], p['longitude']) for p in pts if plausible(cfg, fl, p.get('latitude'), p.get('longitude'))]
+        # FlightAware's track once (the path before the screen came up), then the free ADS-B fixes from here on
+        pts = _api(cfg, f"/flights/{fl['fa_flight_id']}/track", fresh=6 * 3600).get('positions') or []
+        path = [(p['latitude'], p['longitude']) for p in pts if plausible(cfg, fl, p.get('latitude'), p.get('longitude'))]
+        return path + _paths.get(fl.get('fa_flight_id'), [])
     except Exception as e:  # noqa: BLE001
         print('flights: track', e, file=sys.stderr)
-        return []
+        return list(_paths.get(fl.get('fa_flight_id'), []))
 
 
 # ── Geometry ────────────────────────────────────────────────────────────────────────────────────

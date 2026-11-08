@@ -307,7 +307,7 @@ def bottle_overdue(cfg, minutes):
     return bool(limit) and minutes is not None and minutes >= float(limit) * 60
 
 
-FLIGHT_REFRESH = 180   # the tracker moves: a new picture every 3 minutes (sent only when it changed)
+FLIGHT_REFRESH = 120   # the tracker moves: a new position and picture every 2 minutes (free ADS-B)
 
 
 def _due(cfg, state, now, sev=None, bottle=None, flight=None):
