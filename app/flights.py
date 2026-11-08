@@ -244,19 +244,21 @@ def planner_line(fl, home_tz):
     return {'text': '  ·  '.join(p for p in parts if p), 'colour': colour}
 
 
-def in_air(cfg, fl, now):
-    """True from pushback until a little after arriving at the gate (not when cancelled)."""
+def in_air(cfg, fl, now, moving=False):
+    """True from pushback until a little after arriving at the gate (not when cancelled). `moving`: free
+    ADS-B already sees this flight taxiing or flying, before FlightAware has recorded the pushback."""
     if not fl or fl.get('cancelled'):
         return False
-    started = _t(fl.get('actual_out') or fl.get('actual_off'))
-    if not started or started > now:
-        return False
     done = _t(fl.get('actual_in') or fl.get('actual_on'))
-    return not done or now < done + datetime.timedelta(minutes=settings(cfg)['after_arrival_minutes'])
+    if done and now >= done + datetime.timedelta(minutes=settings(cfg)['after_arrival_minutes']):
+        return False
+    started = _t(fl.get('actual_out') or fl.get('actual_off'))
+    return bool(moving) or bool(started and started <= now)
 
 
-def active(cfg, now=None):
-    """The calendar flight being flown right now (its AeroAPI flight plus the calendar entry), or None."""
+def active(cfg, now=None, moving=()):
+    """The calendar flight being flown right now (its AeroAPI flight plus the calendar entry), or None.
+    moving: FlightAware ids that free ADS-B already sees on the move."""
     if not configured(cfg) or not someone_home(cfg):
         return None
     now = now or datetime.datetime.now(datetime.timezone.utc)
@@ -268,9 +270,55 @@ def active(cfg, now=None):
         except Exception as e:  # noqa: BLE001
             print('flights:', cf['ident'], e, file=sys.stderr)
             continue
-        if in_air(cfg, fl, now):
+        if in_air(cfg, fl, now, fl.get('fa_flight_id') in moving if fl else False):
             return {'calendar': cf, 'flight': fl}
     return None
+
+
+def watched(cfg, now=None):
+    """The calendar flight worth watching for a change: from an hour before departure until shortly
+    after it reaches the gate (cached FlightAware data only: no extra cost)."""
+    if not configured(cfg) or not someone_home(cfg):
+        return None
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    for cf in calendar_flights(cfg, now):
+        if not (cf['start'] - datetime.timedelta(hours=1) <= now <= cf['start'] + datetime.timedelta(hours=20)):
+            continue
+        try:
+            fl = flight_for(cfg, cf['ident'], cf['start'], now)
+        except Exception:  # noqa: BLE001
+            continue
+        if not fl or fl.get('cancelled'):
+            continue
+        done = _t(fl.get('actual_in'))
+        if done and now > done + datetime.timedelta(minutes=settings(cfg)['after_arrival_minutes']):
+            continue
+        return {'calendar': cf, 'flight': fl}
+    return None
+
+
+def phase(cfg, fl):
+    """What free ADS-B says the aircraft is doing: 'parked', 'taxiing', 'airborne', or None (not seen).
+    Costs nothing, so it can be checked every 30 seconds."""
+    _, a = _adsb(cfg, fl)
+    if not a:
+        return None
+    flying_as = (a.get('flight') or '').strip()
+    if flying_as and flying_as not in {fl.get('atc_ident'), fl.get('ident_icao'), fl.get('ident')}:
+        return None  # found by tail number but on another leg (e.g. still arriving from its last trip)
+    if a.get('alt_baro') == 'ground' or (isinstance(a.get('alt_baro'), (int, float)) and a['alt_baro'] < 100
+                                          and (a.get('gs') or 0) < 60):
+        return 'taxiing' if (a.get('gs') or 0) >= 5 else 'parked'
+    return 'airborne'
+
+
+def refresh_now(fl):
+    """Forget the cached FlightAware answers for this flight, so the next look is fresh (one call)."""
+    with _lock:
+        for key in list(_cache):
+            if key[0] == 'api' and (f"/flights/{fl.get('ident_iata')}" in key[1] or str(fl.get('fa_flight_id')) in key[1]
+                                    or any(f"/flights/{i}" == key[1] for i in (fl.get('ident'), fl.get('ident_icao')))):
+                _cache.pop(key, None)
 
 
 def next_flight(cfg, now=None):

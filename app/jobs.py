@@ -404,15 +404,25 @@ def tick(cfg, now, memo):
         bottle = memo.get('bottle')
     flight = None
     if flights.configured(cfg):
+        watch_flight(cfg, memo, now)
+        if memo.get('flight_force'):  # the aircraft changed state: look again now, not in a minute
+            memo['flight_at'] = 0
         if time.time() - memo.get('flight_at', 0) >= 60:
             try:
-                memo['flight'] = flights.active(cfg, now)
+                moving = {memo.get('phase_flight')} if memo.get('phase') in ('taxiing', 'airborne') else set()
+                memo['flight'] = flights.active(cfg, now, moving)
             except Exception as e:  # noqa: BLE001
                 memo['flight'] = None
                 print('flight check:', e, file=sys.stderr)
             memo['flight_at'] = time.time()
         flight = memo.get('flight')
     action = _due(cfg, state, now, sev, bottle, flight)
+    if flight and state.get('showing') == 'flight' and action is None and not (
+            (state.get('manual_until') or 0) > now.timestamp() and state.get('flight_id') != flight['flight'].get('fa_flight_id')):
+        word = flights.status(flight['flight'])[0]
+        if memo.pop('flight_force', False) or (state.get('flight_status') and word != state.get('flight_status')):
+            action = 'flight_refresh'  # departed, took off, landed, delayed…: update the screen right away
+    memo.pop('flight_force', None)
     if action in ('bottle_end', 'resume_drop'):
         state = _after_bottle(cfg, state, now) if action == 'bottle_end' else dict(state, resume=None)
         save_state(state)
@@ -618,6 +628,39 @@ def end_recipe(cfg):
         hide(cfg)
 
 
+PHASE_EVERY = 30   # seconds between free ADS-B looks at a watched flight
+
+
+def watch_flight(cfg, memo, now):
+    """Every 30 s, ask free ADS-B what the watched aircraft is doing. When that changes (parked → taxiing
+    → airborne → taxiing → parked), seen twice in a row, refresh FlightAware and the screen at once:
+    a handful of half-cent calls per flight instead of waiting for the next scheduled look."""
+    if time.time() - memo.get('phase_at', 0) < PHASE_EVERY:
+        return
+    memo['phase_at'] = time.time()
+    try:
+        w = flights.watched(cfg, now)
+        p = flights.phase(cfg, w['flight']) if w else None
+    except Exception as e:  # noqa: BLE001
+        print('flight watch:', e, file=sys.stderr)
+        return
+    if not w or p is None:
+        return
+    key = w['flight'].get('fa_flight_id')
+    if memo.get('phase_flight') != key:
+        memo.update(phase_flight=key, phase=p, phase_seen=None)
+        return
+    if p == memo.get('phase'):
+        memo['phase_seen'] = None
+        return
+    if memo.get('phase_seen') != p:  # once could be a glitch: wait for a second look
+        memo['phase_seen'] = p
+        return
+    log(f"Flight {w['calendar']['ident']}: {memo.get('phase')} → {p}; checking FlightAware now")
+    memo.update(phase=p, phase_seen=None, flight_force=True)
+    flights.refresh_now(w['flight'])
+
+
 def show_flight(cfg, found, refresh=False, woke=False, until=None):
     def make(a, state):
         render.render_flight(flights.screen(cfg, found), LAST_IMAGE)
@@ -626,6 +669,7 @@ def show_flight(cfg, found, refresh=False, woke=False, until=None):
     with lock:
         st = load_state()
         st['flight_id'] = found['flight'].get('fa_flight_id')
+        st['flight_status'] = flights.status(found['flight'])[0]
         save_state(st)
 
 

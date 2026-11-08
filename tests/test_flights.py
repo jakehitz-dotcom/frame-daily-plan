@@ -146,3 +146,36 @@ def test_adsb_lookup_tries_atc_callsign_then_tail_number(monkeypatch):
     monkeypatch.setattr(flights.requests, 'get', get)
     name, a = flights._adsb(CFG, fl(atc_ident='SKW5429', registration='N637SY'))
     assert asked == ['SKW5429', 'UAL1234', 'N637SY'] and name == 'adsb.lol' and a['lat'] == 45.9
+
+
+def test_phase_from_adsb(monkeypatch):
+    f = fl(atc_ident='SKW5429')
+    for a, want in (({'flight': 'SKW5429 ', 'alt_baro': 'ground', 'gs': 0}, 'parked'),
+                    ({'flight': 'SKW5429', 'alt_baro': 'ground', 'gs': 14}, 'taxiing'),
+                    ({'flight': 'SKW5429', 'alt_baro': 12000, 'gs': 280}, 'airborne'),
+                    ({'flight': 'SKW3305', 'alt_baro': 'ground', 'gs': 12}, None)):   # same tail, earlier leg
+        monkeypatch.setattr(flights, '_adsb', lambda cfg, x, a=a: ('adsb.lol', a))
+        assert flights.phase(CFG, f) == want
+
+
+def test_moving_on_adsb_starts_the_tracker_before_flightaware_catches_up():
+    t = datetime.datetime(2026, 11, 9, 2, 8, tzinfo=UTC)
+    assert not flights.in_air(CFG, fl(), t) and flights.in_air(CFG, fl(), t, moving=True)
+    landed = fl(actual_out='2026-11-09T02:10:00Z', actual_in='2026-11-09T04:25:00Z')
+    assert not flights.in_air(CFG, landed, datetime.datetime(2026, 11, 9, 5, 0, tzinfo=UTC), moving=True)
+
+
+def test_a_phase_change_needs_two_looks_then_forces_a_refresh(monkeypatch):
+    seen = iter(['parked', 'taxiing', 'taxiing'])
+    w = {'flight': fl(), 'calendar': {'ident': 'UA1234'}}
+    monkeypatch.setattr(flights, 'watched', lambda cfg, now: w)
+    monkeypatch.setattr(flights, 'phase', lambda cfg, f: next(seen))
+    refreshed = []
+    monkeypatch.setattr(flights, 'refresh_now', lambda f: refreshed.append(1))
+    monkeypatch.setattr(jobs, 'log', lambda m: None)
+    memo = {}
+    for _ in range(3):
+        memo['phase_at'] = 0
+        jobs.watch_flight(CFG, memo, NOW)
+        assert not refreshed or memo.get('flight_force')
+    assert refreshed == [1] and memo['phase'] == 'taxiing'
