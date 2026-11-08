@@ -396,7 +396,8 @@ def events(d, items, x, y, w, bottom, scale=1.0):
     tf = font(s(74), 'DemiBold')
     for ev in items:
         lines = wrap(d, ev['title'], tf, w - 60)
-        need = s(80) + len(lines) * s(92) + s(50)
+        fl = ev.get('flight')
+        need = s(80) + len(lines) * s(92) + (s(72) if fl else 0) + s(50)
         if y + need > bottom:
             d.text((x, y), L['more'], font=font(s(64), 'Medium'), fill=DIM)
             return
@@ -407,6 +408,16 @@ def events(d, items, x, y, w, bottom, scale=1.0):
         d.text((x + 50, y), times + (f"  ·  {L['past']}" if past else ''), font=font(s(62), 'Medium'), fill=DIM if past else SOFT)
         for i, line in enumerate(lines):
             d.text((x + 50, y + s(80) + i * s(92)), line, font=tf, fill=DIM if past else CREAM)
+        if fl:  # flight status: On time · departs 6:05 PM · gate 71A
+            fcol = {'green': (126, 214, 160), 'amber': ORANGE, 'red': (240, 110, 100), 'blue': (130, 170, 255),
+                    'cyan': (110, 210, 240)}.get(fl.get('colour'), SOFT)
+            ft = font(s(58), 'DemiBold')
+            text = fl['text']
+            while d.textlength(text, font=ft) > w - 60 - s(70) and len(text) > 10:
+                text = text.rsplit('  ·  ', 1)[0] if '  ·  ' in text else text[:-2]
+            fy = y + s(80) + len(lines) * s(92) + s(4)
+            _plane(d, x + 50 + s(24), fy + s(34), 45, s(24), fcol, fcol)
+            d.text((x + 50 + s(66), fy), text, font=ft, fill=fcol)
         y += need
 
 
@@ -1215,5 +1226,223 @@ def render_severe(sv, out):
 
     d.text((m, H - 26), f"Updated at {sv['updated']}", font=font(30, 'Medium'), fill=(112, 115, 122), anchor='ls')
     d.text((W - m, H - 26), 'Radar NOAA MRMS / IEM  ·  Map © Esri, HERE, Garmin, © OpenStreetMap contributors  ·  Forecast Open-Meteo, NWS',
+           font=font(30, 'Medium'), fill=(112, 115, 122), anchor='rs')
+    Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=92)
+
+
+# ── Flight tracker ──────────────────────────────────────────────────────────────────────────────
+FL_COLOURS = {'green': SV_GREEN, 'amber': SV_AMBER, 'red': SV_RED, 'blue': SV_BLUE, 'cyan': SV_CYAN}
+PLANE = [(0, -1), (0.12, -0.78), (0.12, -0.25), (0.95, 0.16), (0.95, 0.32), (0.12, 0.12), (0.09, 0.64),
+         (0.38, 0.84), (0.38, 0.97), (0, 0.88), (-0.38, 0.97), (-0.38, 0.84), (-0.09, 0.64), (-0.12, 0.12),
+         (-0.95, 0.32), (-0.95, 0.16), (-0.12, -0.25), (-0.12, -0.78)]
+
+
+def _plane(draw, x, y, heading, size, fill, outline):
+    a = math.radians(heading or 0)
+    pts = [(x + (px * math.cos(a) - py * math.sin(a)) * size, y + (px * math.sin(a) + py * math.cos(a)) * size)
+           for px, py in PLANE]
+    draw.polygon(pts, fill=fill, outline=outline, width=4)
+
+
+def _dashed(draw, pts, fill, width, dash=26, gap=18):
+    on, left = True, dash
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        seg = math.hypot(x1 - x0, y1 - y0)
+        pos = 0
+        while pos < seg:
+            step = min(left, seg - pos)
+            if on:
+                f0, f1 = pos / seg, (pos + step) / seg
+                draw.line([(x0 + (x1 - x0) * f0, y0 + (y1 - y0) * f0), (x0 + (x1 - x0) * f1, y0 + (y1 - y0) * f1)],
+                          fill=fill, width=width)
+            pos += step
+            left -= step
+            if left <= 0:
+                on = not on
+                left = dash if on else gap
+
+
+def _hm(minutes):
+    h, m = divmod(int(minutes), 60)
+    return f'{h}h {m:02d}m' if h else f'{m} min'
+
+
+def render_flight(fd, out):
+    """The in-flight screen: route map with the aircraft, and a rail of times, live numbers and progress."""
+    global L
+    L = LABELS['en']
+    import flights as fl_mod
+    import radar
+    bg = Image.new('RGBA', (W, H), SV_BG + (255,))
+    grid = ImageDraw.Draw(bg)
+    for gx in range(0, W, 96):
+        grid.line([(gx, 0), (gx, H)], fill=(14, 22, 34, 255), width=1)
+    for gy in range(0, H, 96):
+        grid.line([(0, gy), (W, gy)], fill=(14, 22, 34, 255), width=1)
+    layer = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    txt = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    d, ld = ImageDraw.Draw(txt), ImageDraw.Draw(layer)
+    m = 100
+    org, dst, pos = fd.get('origin') or {}, fd.get('destination') or {}, fd.get('position')
+    colour = FL_COLOURS.get(fd.get('colour'), SV_CYAN)
+
+    # Header
+    _plane(d, m + 50, 116, 45, 46, SV_CYAN, SV_CYAN)
+    d.text((m + 120, 58), fd['ident'], font=font(96, 'Bold'), fill=CREAM)
+    x = m + 140 + d.textlength(fd['ident'], font=font(96, 'Bold'))
+    route = f"{org.get('city') or org.get('code', '')}  →  {dst.get('city') or dst.get('code', '')}"
+    d.text((x + 30, 84), route, font=font(66, 'Medium'), fill=SOFT)
+    chip = fd['status'].upper()
+    f = font(48, 'DemiBold')
+    tw = d.textlength(chip, font=f)
+    ld.rounded_rectangle((W - m - tw - 70, 76, W - m, 160), radius=42, fill=colour + (40,), outline=colour + (255,), width=3)
+    d.text((W - m - tw / 2 - 35, 118), chip, font=f, fill=colour, anchor='mm')
+    sub = '  ·  '.join(p for p in (fd.get('operator') and fd.get('callsign'), fd.get('aircraft'),
+                                    fd.get('registration')) if p)
+    if sub:
+        d.text((m + 124, 176), sub, font=font(40, 'Medium'), fill=DIM)
+
+    # Map
+    mbox = (m, 250, 2690, H - 110)
+    sv_panel(layer, mbox)
+    inner = (mbox[0] + 14, mbox[1] + 14, mbox[2] - 14, mbox[3] - 14)
+    iw, ih = inner[2] - inner[0], inner[3] - inner[1]
+    a = (org['lat'], org['lon']) if org.get('lat') is not None else None
+    b = (dst['lat'], dst['lon']) if dst.get('lat') is not None else None
+    gc = fl_mod.great_circle(a, b) if a and b else []
+    pts = gc + ([(pos['lat'], pos['lon'])] if pos else []) + (fd.get('path') or [])
+    if pts:
+        view = radar.map_view(pts, iw, ih)
+        img = view['base']
+        P = view['project']
+        ov = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+        od = ImageDraw.Draw(ov)
+        if gc:
+            _dashed(od, [P(*p) for p in gc], (214, 210, 200, 150), 6)
+        flown = fd.get('path') or []
+        if not flown and pos and gc:  # no track yet: the great circle up to the aircraft
+            k = min(range(len(gc)), key=lambda i: (gc[i][0] - pos['lat']) ** 2 + (gc[i][1] - pos['lon']) ** 2)
+            flown = gc[:k + 1] + [(pos['lat'], pos['lon'])]
+        elif flown and pos:
+            flown = flown + [(pos['lat'], pos['lon'])]
+        if fd.get('arrived') and gc:
+            flown = flown or gc
+        if len(flown) > 1:
+            line = [P(*p) for p in flown]
+            glow = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+            ImageDraw.Draw(glow).line(line, fill=SV_CYAN + (120,), width=22, joint='curve')
+            ov.alpha_composite(glow.filter(ImageFilter.GaussianBlur(8)))
+            od.line(line, fill=SV_CYAN + (255,), width=8, joint='curve')
+        img.alpha_composite(ov)
+        radar.overlay_geography(img, view)
+        top = ImageDraw.Draw(img)
+        for ap, at in ((org, a), (dst, b)):
+            if not at:
+                continue
+            px, py = P(*at)
+            top.ellipse((px - 22, py - 22, px + 22, py + 22), fill=SV_BG + (255,), outline=CREAM + (255,), width=6)
+            top.ellipse((px - 8, py - 8, px + 8, py + 8), fill=CREAM + (255,))
+            label = ap.get('code', '')
+            lf = font(52, 'Bold')
+            lw = top.textlength(label, font=lf)
+            lx = px + 36 if px < iw - lw - 120 else px - 36 - lw - 40
+            top.rounded_rectangle((lx, py - 40, lx + lw + 40, py + 40), radius=18, fill=(6, 10, 18, 220),
+                                  outline=SV_EDGE, width=3)
+            top.text((lx + 20, py), label, font=lf, fill=CREAM, anchor='lm')
+        if pos:
+            px, py = P(pos['lat'], pos['lon'])
+            halo = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+            ImageDraw.Draw(halo).ellipse((px - 90, py - 90, px + 90, py + 90), fill=SV_CYAN + (90,))
+            img.alpha_composite(halo.filter(ImageFilter.GaussianBlur(24)))
+            _plane(ImageDraw.Draw(img), px, py, pos.get('heading'), 64, CREAM + (255,), SV_BG + (255,))
+    else:
+        img = Image.new('RGBA', (iw, ih), (10, 14, 22, 255))
+    mask = Image.new('L', (iw, ih), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, iw, ih), radius=20, fill=255)
+    layer.paste(img, inner[:2], mask)
+    if pos:
+        cw_ = d.textlength(f"LIVE  ·  {pos.get('source')}", font=font(40, 'DemiBold'))
+        ld.rounded_rectangle((inner[0] + 26, inner[1] + 26, inner[0] + 130 + cw_, inner[1] + 110), radius=40,
+                             fill=(6, 10, 18, 215))
+        d.ellipse((inner[0] + 56, inner[1] + 56, inner[0] + 80, inner[1] + 80), fill=SV_GREEN)
+        d.text((inner[0] + 100, inner[1] + 68), f"LIVE  ·  {pos.get('source')}", font=font(40, 'DemiBold'),
+               fill=SOFT, anchor='lm')
+
+    # Rail
+    rx0, rx1 = 2740, W - m
+
+    def card(y0, y1, title, col):
+        sv_panel(layer, (rx0, y0, rx1, y1), title, d, col)
+
+    def city(ap):
+        return f"{ap.get('city') or ap.get('name') or ''}  ·  {ap.get('code', '')}"
+
+    # Departure
+    card(250, 690, 'DEPARTED' if fd.get('dep_actual') else 'DEPARTS', SV_CYAN)
+    d.text((rx0 + 50, 340), city(org), font=font(44, 'Medium'), fill=SOFT)
+    big = fd.get('dep_actual') or fd.get('dep_sched') or '–'
+    d.text((rx0 + 48, 400), big, font=font(110, 'Bold'), fill=CREAM)
+    late = fd.get('dep_delay') or 0
+    line = f"scheduled {fd.get('dep_sched')}" + (f"  ·  +{late} min" if late >= 5 else '')
+    d.text((rx0 + 52, 540), line, font=font(40, 'Medium'), fill=SV_AMBER if late >= 15 else DIM)
+    gate = '  ·  '.join(p for p in (fd.get('terminal_origin') and f"Terminal {fd['terminal_origin']}",
+                                     fd.get('gate_origin') and f"Gate {fd['gate_origin']}",
+                                     fd.get('takeoff') and f"wheels up {fd['takeoff']}") if p)
+    if gate:
+        d.text((rx0 + 52, 600), gate, font=font(40, 'Medium'), fill=DIM)
+
+    # Arrival
+    card(720, 1180, 'ARRIVED' if fd.get('arrived') else 'ARRIVES', SV_GREEN if not fd.get('arr_delay', 0) >= 15 else SV_AMBER)
+    d.text((rx0 + 50, 810), city(dst), font=font(44, 'Medium'), fill=SOFT)
+    d.text((rx0 + 48, 870), fd.get('arr_est') or '–', font=font(110, 'Bold'), fill=CREAM)
+    late = fd.get('arr_delay') or 0
+    line = f"scheduled {fd.get('arr_sched')}" + (f"  ·  +{late} min" if late >= 5 else
+                                                 f"  ·  {-late} min early" if late <= -5 else '')
+    d.text((rx0 + 52, 1010), line, font=font(40, 'Medium'), fill=SV_AMBER if late >= 15 else DIM)
+    extra = '  ·  '.join(p for p in (fd.get('arr_home') and f"{fd['arr_home']} here",
+                                      fd.get('gate_destination') and f"Gate {fd['gate_destination']}",
+                                      fd.get('baggage') and f"Bags {fd['baggage']}") if p)
+    if extra:
+        d.text((rx0 + 52, 1070), extra, font=font(40, 'Medium'), fill=DIM)
+
+    # Live numbers
+    card(1210, 1700, 'LIVE', SV_CYAN)
+    cells = []
+    if pos:
+        vr = pos.get('vrate') or 0
+        arrow = ' ▲' if vr > 300 else ' ▼' if vr < -300 else ''
+        cells = [('ALTITUDE', f"{int(pos['alt_ft']):,} ft" if pos.get('alt_ft') else 'on ground', arrow),
+                 ('GROUND SPEED', f"{pos['gs_mph']} mph" if pos.get('gs_mph') is not None else '–', ''),
+                 ('AIRSPEED', f"{pos['tas_mph']} mph" if pos.get('tas_mph') else '–', ''),
+                 ('HEADING', f"{round(pos.get('heading') or 0)}°  {['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][round((pos.get('heading') or 0) / 45) % 8]}", '')]
+    else:
+        msg = 'Arrived' if fd.get('arrived') else 'Waiting for the first position…'
+        d.text((rx0 + 50, 1360), msg, font=font(52, 'DemiBold'), fill=SOFT)
+    cw = (rx1 - rx0 - 100) / 2
+    for i, (label, value, arrow) in enumerate(cells):
+        cx, cy = rx0 + 50 + (i % 2) * cw, 1320 + (i // 2) * 190
+        d.text((cx, cy), label, font=font(34, 'DemiBold'), fill=DIM)
+        d.text((cx, cy + 50), value, font=font(66, 'Bold'), fill=CREAM)
+        if arrow:
+            d.text((cx + d.textlength(value, font=font(66, 'Bold')), cy + 58), arrow, font=font(52, 'Bold'),
+                   fill=SV_GREEN if '▲' in arrow else SV_AMBER)
+
+    # Progress
+    card(1730, H - 110, 'PROGRESS', SV_BLUE)
+    p = max(0, min(100, fd.get('progress') or (100 if fd.get('arrived') else 0)))
+    by, bx0, bx1 = 1850, rx0 + 50, rx1 - 50
+    ld.rounded_rectangle((bx0, by, bx1, by + 34), radius=17, fill=(30, 40, 58, 255))
+    if p:
+        ld.rounded_rectangle((bx0, by, bx0 + (bx1 - bx0) * p / 100, by + 34), radius=17, fill=SV_BLUE + (255,))
+    d.text((bx0, by + 60), f'{p}%', font=font(56, 'Bold'), fill=CREAM)
+    left = fd.get('minutes_left')
+    d.text((bx1, by + 66), (f'{_hm(left)} to go' if left else 'Arrived' if fd.get('arrived') else ''),
+           font=font(48, 'DemiBold'), fill=SOFT, anchor='ra')
+    if fd.get('total_mi'):
+        d.text((bx0, by + 140), f"{fd.get('flown_mi') or 0:,} of {fd['total_mi']:,} mi flown", font=font(38, 'Medium'),
+               fill=DIM)
+
+    d.text((m, H - 40), f"Updated at {fd['updated']}", font=font(30, 'Medium'), fill=(112, 115, 122), anchor='ls')
+    d.text((W - m, H - 40), 'Flight data FlightAware  ·  Live position airplanes.live (ADS-B)  ·  Map © Esri, HERE, Garmin, © OpenStreetMap contributors',
            font=font(30, 'Medium'), fill=(112, 115, 122), anchor='rs')
     Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=92)

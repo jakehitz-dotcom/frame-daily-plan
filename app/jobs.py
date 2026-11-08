@@ -15,6 +15,7 @@ import ha
 import todo_track
 import plan_data
 import recipe
+import flights
 import guest
 import radar
 import render
@@ -306,7 +307,10 @@ def bottle_overdue(cfg, minutes):
     return bool(limit) and minutes is not None and minutes >= float(limit) * 60
 
 
-def _due(cfg, state, now, sev=None, bottle=None):
+FLIGHT_REFRESH = 180   # the tracker moves: a new picture every 3 minutes (sent only when it changed)
+
+
+def _due(cfg, state, now, sev=None, bottle=None, flight=None):
     if not cfg.get('tv_ip'):
         return None  # not set up yet
     every = int(cfg['schedule'].get('refresh_minutes', 5) or 0) * 60
@@ -317,7 +321,14 @@ def _due(cfg, state, now, sev=None, bottle=None):
             return 'refresh'
         if stale and state.get('showing') == 'severe':
             return 'severe_refresh'
+        if state.get('showing') == 'flight' and now.timestamp() - state.get('shown_at', 0) >= FLIGHT_REFRESH:
+            return 'flight_refresh'
         return None
+    # A flight on the calendar is in the air: the tracker, over everything automatic.
+    if flight:
+        if state.get('showing') != 'flight' or state.get('flight_id') != flight['flight'].get('fa_flight_id'):
+            return 'flight'
+        return 'flight_refresh' if now.timestamp() - state.get('shown_at', 0) >= FLIGHT_REFRESH else None
     # A bottle 3.5 hours ago or more (bottle_alert_hours) puts the plan up, whatever else is going on, until the next bottle.
     if bottle_overdue(cfg, bottle):
         if not state.get('bottle_override') or state.get('showing') != 'plan':
@@ -340,7 +351,7 @@ def _due(cfg, state, now, sev=None, bottle=None):
     if view:
         if state.get('shown_on') != now.date().isoformat() or state.get('shown_view', 'day') != view:
             return 'show'  # also when Sunday's morning plan gives way to the week ahead
-        if state.get('showing') == 'severe':
+        if state.get('showing') in ('severe', 'flight'):
             return 'show'  # the voice-requested monitoring time is up: back to the plan
         return refresh  # a message, demo or "Back to artwork" in between is left alone
     if state.get('showing') == 'plan' and (state.get('until') or 0) > now.timestamp():
@@ -350,8 +361,8 @@ def _due(cfg, state, now, sev=None, bottle=None):
         if state.get('showing') != 'severe':
             return 'severe'
         return 'severe_refresh' if stale else None
-    if state.get('showing') == 'severe':
-        return 'restore'  # triggers cleared (or hidden): back to the artwork
+    if state.get('showing') in ('severe', 'flight'):
+        return 'restore'  # triggers cleared, or the flight has landed: back to the artwork
     until = state.get('until') or 0
     if until > now.timestamp():
         return refresh  # asked for by voice: kept up to date until its time is up
@@ -391,11 +402,21 @@ def tick(cfg, now, memo):
             memo['bottle'] += (time.time() - memo.get('bottle_tick', time.time())) / 60
         memo['bottle_tick'] = time.time()
         bottle = memo.get('bottle')
-    action = _due(cfg, state, now, sev, bottle)
+    flight = None
+    if flights.configured(cfg):
+        if time.time() - memo.get('flight_at', 0) >= 60:
+            try:
+                memo['flight'] = flights.active(cfg, now)
+            except Exception as e:  # noqa: BLE001
+                memo['flight'] = None
+                print('flight check:', e, file=sys.stderr)
+            memo['flight_at'] = time.time()
+        flight = memo.get('flight')
+    action = _due(cfg, state, now, sev, bottle, flight)
     if action in ('bottle_end', 'resume_drop'):
         state = _after_bottle(cfg, state, now) if action == 'bottle_end' else dict(state, resume=None)
         save_state(state)
-        action = _due(cfg, state, now, sev, bottle)
+        action = _due(cfg, state, now, sev, bottle, flight)
     if action == 'bottle' and state.get('showing') == 'plan':  # the plan is already up: just hold it there
         state.update(bottle_override=True, bottle_prev={'showing': 'plan', 'until': state.get('until')}, until=None)
         save_state(state)
@@ -411,10 +432,13 @@ def tick(cfg, now, memo):
             ss = severe.settings(cfg)
             window = f"severe:{now.date().isoformat()}:{(sev or {}).get('signature')}" \
                 if ss['wake'] and not severe.in_quiet_hours(cfg, now) else None
+        if action == 'flight':  # once per flight, at pushback, not in the night's quiet hours
+            window = f"flight:{flight['flight'].get('fa_flight_id')}" \
+                if flights.settings(cfg)['wake'] and not severe.in_quiet_hours(cfg, now) else None
         # The TV is woken once per window, at its start, and never again in it: refreshes, the end of
         # the window and a failed wake-up all wait for motion to wake the TV. Recorded in the state file,
         # so restarting the app cannot cause a second wake-up.
-        if action in ('show', 'severe') and window and cfg.get('wake_tv', True) and mac \
+        if action in ('show', 'severe', 'flight') and window and cfg.get('wake_tv', True) and mac \
                 and state.get('woke_for') != window:
             state['woke_for'] = window
             save_state(state)
@@ -444,6 +468,10 @@ def tick(cfg, now, memo):
             save_state(st)
     elif action == 'resume':
         resume(cfg)
+    elif action in ('flight', 'flight_refresh'):
+        found = flight or flights.next_flight(cfg, now)
+        if found:
+            show_flight(cfg, found, refresh=action == 'flight_refresh', woke=woke)
     elif action in ('severe', 'severe_refresh'):
         show_severe(cfg, refresh=action == 'severe_refresh', woke=woke)
     else:
@@ -483,7 +511,7 @@ def resume(cfg):
         show_severe(cfg, until=prev['until'])
 
 
-SCREEN_MODES = ('art', 'plan', 'week', 'weather', 'recipe')
+SCREEN_MODES = ('art', 'plan', 'week', 'weather', 'recipe', 'flight')
 
 
 def current_mode(state=None, now=None):
@@ -492,7 +520,7 @@ def current_mode(state=None, now=None):
     showing = state.get('showing')
     if showing == 'plan':
         return 'week' if state.get('shown_view') == 'week' or state.get('manual_view') == 'week' else 'plan'
-    return {'severe': 'weather', 'recipe': 'recipe', None: 'art'}.get(showing, 'other')
+    return {'severe': 'weather', 'recipe': 'recipe', 'flight': 'flight', None: 'art'}.get(showing, 'other')
 
 
 def last_recipe():
@@ -533,6 +561,11 @@ def screen_mode(cfg, mode, minutes=30):
         restore(cfg)
     elif mode in ('plan', 'week'):
         show_plan(cfg, woke=woke, until=until, view='day' if mode == 'plan' else 'week')
+    elif mode == 'flight':
+        found = flights.next_flight(cfg)
+        if not found:
+            raise RuntimeError('no flight on the calendar today or tomorrow')
+        show_flight(cfg, found, woke=woke, until=until)
     else:
         show_severe(cfg, woke=woke, until=until)
     log(f'Screen Control: {mode} for {minutes} minutes')
@@ -583,6 +616,25 @@ def end_recipe(cfg):
         show_plan(cfg)
     else:
         hide(cfg)
+
+
+def show_flight(cfg, found, refresh=False, woke=False, until=None):
+    def make(a, state):
+        render.render_flight(flights.screen(cfg, found), LAST_IMAGE)
+    put_temporary(cfg, make, 'Flight tracker updated' if refresh else f"Flight tracker: {found['calendar']['ident']}",
+                  kind='flight', only_if_changed=refresh, woke=woke, until=until)
+    with lock:
+        st = load_state()
+        st['flight_id'] = found['flight'].get('fa_flight_id')
+        save_state(st)
+
+
+def preview_flight(cfg):
+    found = flights.next_flight(cfg)
+    if not found:
+        raise RuntimeError('no flight on the calendar today or tomorrow')
+    render.render_flight(flights.screen(cfg, found), PREVIEW)
+    log('Flight tracker preview created')
 
 
 # ── Severe weather monitoring ─────────────────────────────────────────────────────────────────

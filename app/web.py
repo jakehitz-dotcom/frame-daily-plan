@@ -26,6 +26,7 @@ import tv  # noqa: E402
 import ha  # noqa: E402
 import recipe  # noqa: E402
 import guest  # noqa: E402
+import flights  # noqa: E402
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # phone photos
@@ -276,6 +277,12 @@ def save_settings():
             return redirect(url_for('index', msg=ui()['end_after_start']))
     if 'guest_url' in f:
         cfg['guest'] = {'enabled': 'guest_enabled' in f, 'url': f.get('guest_url', '').strip().rstrip('/')}
+    if 'flights_key' in f:
+        fs = dict(cfg.get('flights') or {})
+        fs.update(enabled='flights_enabled' in f, wake='flights_wake' in f)
+        if f.get('flights_key', '').strip():
+            fs['aeroapi_key'] = f['flights_key'].strip()
+        cfg['flights'] = fs
     if 'severe_precip' in f:
         sv = dict(cfg.get('severe') or {})
         try:
@@ -350,9 +357,10 @@ REMOTE_MODES = [  # (mode, icon, label, what it shows)
     ('weather', '🌧️', 'Weather', 'Radar, rain and wind'),
     ('recipe', '🍳', 'Last recipe', ''),
     ('art', '🖼️', 'Artwork', 'Back to the picture'),
+    ('flight', '✈️', 'Flight', ''),
 ]
 MODE_NAMES = {'plan': 'the planner', 'week': 'the next 7 days', 'weather': 'the weather', 'recipe': 'a recipe',
-              'art': 'artwork', 'other': 'a message'}
+              'art': 'artwork', 'flight': 'the flight tracker', 'other': 'a message'}
 
 
 def _guest_page(tok, message=None, kind='', confirm=None, text='', status=200):
@@ -369,6 +377,17 @@ def _guest_page(tok, message=None, kind='', confirm=None, text='', status=200):
             if not last:
                 continue
             sub = last.get('name') or 'Recipe'
+        if mode == 'flight':
+            try:
+                found = flights.next_flight(cfg) if flights.configured(cfg) else None
+            except Exception:  # noqa: BLE001
+                found = None
+            if not found:
+                continue
+            f = found['flight']
+            sub = f"{flights.pretty_ident(f.get('ident_iata') or found['calendar']['ident'])}  ·  " \
+                  f"{(f.get('origin') or {}).get('code_iata', '')} → {(f.get('destination') or {}).get('code_iata', '')}"
+            label = 'Flight' + (' · live' if flights.in_air(cfg, f, datetime.datetime.now(datetime.timezone.utc)) else '')
         modes.append({'mode': mode, 'icon': icon, 'label': label, 'sub': sub, 'on': mode == now_mode})
     showing, _ = _guest_now_showing(cfg)
     return render_template('guest.html', base=f'/G/{tok.upper()}', message=message, kind=kind, confirm=confirm,
@@ -502,6 +521,12 @@ def guest_rotate():
         guest.rotate()
         jobs.preview(config.load())
     return run_action('a_guest_rotate', go)
+
+
+@app.post('/preview-flight')
+@protected
+def preview_flight():
+    return run_action('a_preview_flight', lambda: jobs.preview_flight(config.load()))
 
 
 @app.post('/preview-severe')

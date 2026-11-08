@@ -174,6 +174,13 @@
         <select name="week_day" style="width:150px">{% for name in t.day_names %}<option value="{{ loop.index0 }}" {{ 'selected' if loop.index0 == cfg.week_view.day }}>{{ name }}</option>{% endfor %}</select>
         {{ t.from }} <input type="time" name="week_start" value="{{ cfg.week_view.start }}"> {{ t.to }} <input type="time" name="week_end" value="{{ cfg.week_view.end }}">
         <button formaction="{{ url_for('preview_week') }}" formnovalidate>{{ t.btn_preview_week }}</button></div>
+      {% set fl = cfg.flights or {} %}
+      <label>{{ t.flights }}</label>
+      <div class="row"><label class="inline"><input type="checkbox" name="flights_enabled" {% if fl.enabled is not defined or fl.enabled %}checked{% endif %}> {{ t.flights_label }}</label>
+        <input type="password" name="flights_key" value="" placeholder="{{ t.flights_key_set if fl.aeroapi_key else t.flights_key_ph }}" autocomplete="off" style="max-width:320px">
+        <label class="inline"><input type="checkbox" name="flights_wake" {% if fl.wake is not defined or fl.wake %}checked{% endif %}> {{ t.flights_wake }}</label>
+        <button formaction="{{ url_for('preview_flight') }}" formnovalidate>{{ t.btn_preview }}</button></div>
+      <p class="hint">{{ t.flights_hint }}</p>
       {% set gs = cfg.guest or {} %}
       <label>{{ t.guest }}</label>
       <div class="row"><label class="inline"><input type="checkbox" name="guest_enabled" {% if gs.enabled is not defined or gs.enabled %}checked{% endif %}> {{ t.guest_label }}</label>

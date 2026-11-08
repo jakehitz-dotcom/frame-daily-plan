@@ -11,6 +11,7 @@ import icalendar
 import recurring_ical_events
 
 import banner
+import flights
 import guest
 import ha
 import nws
@@ -366,6 +367,19 @@ def build(cfg, now):
     events_tomorrow.sort(key=lambda e: e['sort'])
     for e in events:
         e['past'] = bool(cfg.get('dim_past_events')) and e['end_dt'] is not None and e['end_dt'] <= now
+    if flights.configured(cfg):  # flight status under each flight on the calendar
+        for day, evs in ((today, events), (tomorrow, events_tomorrow)):
+            for e in evs:
+                ident = flights.find_ident(e['title'])
+                if not ident or ':' not in (e.get('sort') or ''):
+                    continue
+                try:
+                    start = datetime.datetime.combine(day, datetime.time.fromisoformat(e['sort']), tz)
+                    fl = flights.flight_for(cfg, ident, start, now)
+                    if fl:
+                        e['flight'] = flights.planner_line(fl, tz)
+                except Exception as ex:  # noqa: BLE001
+                    errors.append(f'Flight {ident}: {ex}')
     data = {'date': today.isoformat(), 'lang': cfg.get('plan_lang', 'en'), 'today': events,
             'tomorrow': events_tomorrow, 'todos': sorted(set(todos)), 'todos_done': [], 'weather': None, 'errors': errors}
     loc = cfg.get('weather') or {}

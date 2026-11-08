@@ -197,3 +197,44 @@ def radar_map(lat, lon, w, h, zoom=9):
         img.alpha_composite(labels)
     return {'image': img, 'source': source, 'time': datetime.datetime.now().astimezone() if source else None,
             'm_per_px': metres_per_px(lat, zoom), 'has_map': has_map}
+
+
+def fit_zoom(points, w, h, pad=0.14, zmin=3, zmax=10):
+    """The closest zoom at which all (lat, lon) points fit in w x h with a margin."""
+    for z in range(zmax, zmin - 1, -1):
+        xs, ys = zip(*(world_px(lat, lon, z) for lat, lon in points))
+        if max(xs) - min(xs) <= w * (1 - 2 * pad) and max(ys) - min(ys) <= h * (1 - 2 * pad):
+            return z
+    return zmin
+
+
+def map_view(points, w, h, pad=0.14):
+    """A dark map framing all the points: {'base', 'labels', 'coast', 'zoom', 'project'(lat, lon) -> (x, y)}.
+    Bottom to top the caller draws base, its own lines, coast, then labels."""
+    zoom = fit_zoom(points, w, h, pad)
+    xs, ys = zip(*(world_px(lat, lon, zoom) for lat, lon in points))
+    cx, cy = (max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2
+    x0, y0 = cx - w / 2, cy - h / 2
+    base, got = _tiles(BASE, zoom, 2, x0, y0, w, h)
+    img = Image.new('RGBA', (w, h), (10, 14, 22, 255))
+    labels = coast = None
+    if got:
+        img.alpha_composite(base)
+        coast = coastline(img, f'v{zoom}_{round(cx)}_{round(cy)}_{w}x{h}')
+        labels, _ = _tiles(LABELS, zoom, 1, x0, y0, w, h)
+        img = Image.eval(img.convert('RGB'), lambda v: min(255, round(v * 1.25 + 6))).convert('RGBA')
+
+    def project(lat, lon):
+        x, y = world_px(lat, lon, zoom)
+        return x - x0, y - y0
+    return {'base': img, 'labels': labels, 'coast': coast, 'zoom': zoom, 'project': project, 'has_map': bool(got)}
+
+
+def overlay_geography(img, view):
+    """Coastline and place names over whatever was drawn on the map."""
+    if view.get('coast') is not None:
+        img.alpha_composite(_outlined((150, 205, 235, 200), view['coast'].filter(ImageFilter.MaxFilter(3)), 9))
+    if view.get('labels') is not None:
+        img.alpha_composite(_outlined((0, 0, 0, 0), view['labels'].getchannel('A'), 7))
+        img.alpha_composite(view['labels'])
+    return img

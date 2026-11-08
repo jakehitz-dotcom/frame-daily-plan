@@ -52,6 +52,9 @@ DEFAULTS = {
     'recipe': {'enabled': True, 'minutes': 60, 'notify': ''},
     # Severe weather monitoring: shown outside the planner windows while, in the next 24 h, rain > precip_in,
     # a gust > gust_mph, or any NWS alert; wakes the TV once per episode outside quiet hours
+    # Flights on the calendar ("Flight to Denver (UA 1234)"): status on the plan, live tracker in the air.
+    # Needs a FlightAware AeroAPI key (Personal tier: no minimum, $5 free a month).
+    'flights': {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20},
     'severe': {'enabled': True, 'precip_in': 0.3, 'gust_mph': 25, 'minutes': 30, 'wake': True,
                'quiet_start': '22:00', 'quiet_end': '06:00', 'radar_zoom': 9},
     'todo_hint': 'Alexa, add [task] to my to-do list | Alexa, mark [task] as complete',
