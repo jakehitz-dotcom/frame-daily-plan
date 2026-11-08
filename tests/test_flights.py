@@ -115,3 +115,34 @@ def test_nothing_is_looked_up_while_nobody_is_home(monkeypatch):
     states.update({k: 'unavailable' for k in states})
     assert flights.someone_home(CFG)                     # Home Assistant can't say: assume someone is
     flights._cache.clear()
+
+
+def test_positions_at_null_island_or_off_route_are_rejected(monkeypatch):
+    monkeypatch.setattr(flights, 'airport', lambda cfg, ap: {'LAX': {'lat': 33.94, 'lon': -118.41},
+                                                              'DEN': {'lat': 39.86, 'lon': -104.67}}[ap['code_iata']])
+    assert flights.plausible(CFG, fl(), 37.0, -112.0)
+    assert not flights.plausible(CFG, fl(), 0.0, 0.0)
+    assert not flights.plausible(CFG, fl(), 51.5, -0.1)                  # London: not on LAX-DEN
+
+
+def test_adsb_lookup_tries_atc_callsign_then_tail_number(monkeypatch):
+    monkeypatch.setattr(flights, 'plausible', lambda cfg, f, lat, lon: lat is not None and abs(lat) > 1)
+    asked = []
+
+    class R:
+        def __init__(self, ac):
+            self.ac = ac
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'ac': self.ac}
+
+    def get(url, headers=None, timeout=None):
+        asked.append(url.rsplit('/', 1)[-1])
+        return R([{'lat': 45.9, 'lon': -111.4, 'gs': 300, 'alt_baro': 12000, 'track': 200}] if url.endswith('N637SY') else
+                 [{'lat': 0, 'lon': 0}])
+    monkeypatch.setattr(flights.requests, 'get', get)
+    name, a = flights._adsb(CFG, fl(atc_ident='SKW5429', registration='N637SY'))
+    assert asked == ['SKW5429', 'UAL1234', 'N637SY'] and name == 'adsb.lol' and a['lat'] == 45.9

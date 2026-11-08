@@ -1365,8 +1365,8 @@ def render_flight(fd, out):
         ld.rounded_rectangle((inner[0] + 26, inner[1] + 26, inner[0] + 130 + cw_, inner[1] + 110), radius=40,
                              fill=(6, 10, 18, 215))
         d.ellipse((inner[0] + 56, inner[1] + 56, inner[0] + 80, inner[1] + 80), fill=SV_GREEN)
-        d.text((inner[0] + 100, inner[1] + 68), f"LIVE  ·  {pos.get('source')}", font=font(40, 'DemiBold'),
-               fill=SOFT, anchor='lm')
+        d.text((inner[0] + 100, inner[1] + 68), f"LIVE  ·  {pos.get('source')}" if not pos.get('ground') else
+               'ON THE GROUND', font=font(40, 'DemiBold'), fill=SOFT, anchor='lm')
 
     # Rail
     rx0, rx1 = 2740, W - m
@@ -1443,6 +1443,6 @@ def render_flight(fd, out):
                fill=DIM)
 
     d.text((m, H - 40), f"Updated at {fd['updated']}", font=font(30, 'Medium'), fill=(112, 115, 122), anchor='ls')
-    d.text((W - m, H - 40), 'Flight data FlightAware  ·  Live position airplanes.live (ADS-B)  ·  Map © Esri, HERE, Garmin, © OpenStreetMap contributors',
+    d.text((W - m, H - 40), 'Flight data FlightAware  ·  Live position adsb.lol / adsb.fi (ADS-B, ODbL)  ·  Map © Esri, HERE, Garmin, © OpenStreetMap contributors',
            font=font(30, 'Medium'), fill=(112, 115, 122), anchor='rs')
     Image.alpha_composite(Image.alpha_composite(bg, layer), txt).convert('RGB').save(out, quality=92)

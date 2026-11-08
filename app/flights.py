@@ -26,7 +26,9 @@ import requests
 import config
 
 AEROAPI = 'https://aeroapi.flightaware.com/aeroapi'
-ADSB = 'https://api.airplanes.live/v2/callsign/{}'
+# Free, open ADS-B (no key). airplanes.live now refuses unregistered apps, so it is not used.
+ADSB = [('adsb.lol', 'https://api.adsb.lol/v2/callsign/{}', 'https://api.adsb.lol/v2/reg/{}'),
+        ('adsb.fi', 'https://opendata.adsb.fi/api/v2/callsign/{}', 'https://opendata.adsb.fi/api/v2/registration/{}')]
 HEADERS = {'User-Agent': 'frame-daily-plan (github.com/jakehitz-dotcom/frame-daily-plan)'}
 AIRPORTS = os.path.join(config.DATA, 'airports.json')
 DEFAULTS = {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20,
@@ -289,26 +291,52 @@ def next_flight(cfg, now=None):
 
 
 # ── Live position ───────────────────────────────────────────────────────────────────────────────
+def plausible(cfg, fl, lat, lon):
+    """A real position near this route: not 0,0 ("null island", what an empty fix looks like), and within
+    the route length plus 400 miles of the departure airport."""
+    if lat is None or lon is None or (abs(lat) < 1 and abs(lon) < 1):
+        return False
+    org = airport(cfg, fl.get('origin')) or {}
+    dst = airport(cfg, fl.get('destination')) or {}
+    if org.get('lat') is None or dst.get('lat') is None:
+        return True
+    span = miles((org['lat'], org['lon']), (dst['lat'], dst['lon']))
+    return miles((org['lat'], org['lon']), (lat, lon)) <= span + 400
+
+
+def _adsb(cfg, fl):
+    """Look the aircraft up by its radio callsign (a United Express flight flies as SkyWest "SKW…",
+    not "UAL…"), its flight number, then its registration (tail number)."""
+    callsigns = [c for c in dict.fromkeys([fl.get('atc_ident'), fl.get('ident_icao'), fl.get('ident')]) if c]
+    reg = fl.get('registration')
+    for name, by_cs, by_reg in ADSB:
+        urls = [by_cs.format(c) for c in callsigns] + ([by_reg.format(reg)] if reg else [])
+        for url in urls:
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=10)
+                r.raise_for_status()
+                for a in r.json().get('ac') or []:
+                    if plausible(cfg, fl, a.get('lat'), a.get('lon')):
+                        return name, a
+            except Exception as e:  # noqa: BLE001  try the next way / the next service
+                print('flights:', name, url.rsplit('/', 1)[-1], e, file=sys.stderr)
+    return None, None
+
+
 def live_position(cfg, fl):
     """{'lat', 'lon', 'alt_ft', 'gs_mph', 'tas_mph', 'heading', 'vrate', 'source', 'at'} or None."""
-    cs = fl.get('ident_icao') or fl.get('ident')
-    try:
-        r = requests.get(ADSB.format(cs), headers=HEADERS, timeout=10)
-        r.raise_for_status()
-        ac = [a for a in r.json().get('ac') or [] if a.get('lat') is not None]
-        if ac:
-            a = ac[0]
-            alt = a.get('alt_baro')
-            return {'lat': a['lat'], 'lon': a['lon'], 'alt_ft': alt if isinstance(alt, (int, float)) else 0,
-                    'gs_mph': round(a['gs'] * 1.15078) if a.get('gs') is not None else None,
-                    'tas_mph': round(a['tas'] * 1.15078) if a.get('tas') is not None else None,
-                    'heading': a.get('track') or a.get('true_heading') or 0, 'vrate': a.get('baro_rate') or 0,
-                    'source': 'airplanes.live', 'at': time.time() - (a.get('seen_pos') or 0)}
-    except Exception as e:  # noqa: BLE001
-        print('flights: airplanes.live', e, file=sys.stderr)
+    name, a = _adsb(cfg, fl)
+    if a:
+        alt = a.get('alt_baro')
+        return {'lat': a['lat'], 'lon': a['lon'], 'alt_ft': alt if isinstance(alt, (int, float)) else 0,
+                'gs_mph': round(a['gs'] * 1.15078) if a.get('gs') is not None else None,
+                'tas_mph': round(a['tas'] * 1.15078) if a.get('tas') is not None else None,
+                'heading': a.get('track') or a.get('true_heading') or 0,
+                'vrate': a.get('baro_rate') or a.get('geom_rate') or 0,
+                'source': name, 'at': time.time() - (a.get('seen_pos') or 0)}
     try:
         p = _api(cfg, f"/flights/{fl['fa_flight_id']}/position", fresh=240).get('last_position') or {}
-        if p.get('latitude') is not None:
+        if plausible(cfg, fl, p.get('latitude'), p.get('longitude')):
             return {'lat': p['latitude'], 'lon': p['longitude'], 'alt_ft': (p.get('altitude') or 0) * 100,
                     'gs_mph': round((p.get('groundspeed') or 0) * 1.15078), 'tas_mph': None,
                     'heading': p.get('heading') or 0,
@@ -322,7 +350,7 @@ def live_position(cfg, fl):
 def track(cfg, fl):
     try:
         pts = _api(cfg, f"/flights/{fl['fa_flight_id']}/track", fresh=900).get('positions') or []
-        return [(p['latitude'], p['longitude']) for p in pts if p.get('latitude') is not None]
+        return [(p['latitude'], p['longitude']) for p in pts if plausible(cfg, fl, p.get('latitude'), p.get('longitude'))]
     except Exception as e:  # noqa: BLE001
         print('flights: track', e, file=sys.stderr)
         return []
@@ -367,6 +395,9 @@ def screen(cfg, found, now=None):
     fl, cf = found['flight'], found['calendar']
     org, dst = airport(cfg, fl.get('origin')), airport(cfg, fl.get('destination'))
     pos = live_position(cfg, fl) if in_air(cfg, fl, now) else None
+    if not pos and not fl.get('actual_off') and org and org.get('lat') is not None:
+        pos = {'lat': org['lat'], 'lon': org['lon'], 'alt_ft': 0, 'gs_mph': None, 'tas_mph': None, 'heading':
+               0, 'vrate': 0, 'source': 'at the gate', 'at': None, 'ground': True}
     path = track(cfg, fl) if fl.get('actual_off') else []
     word, colour = status(fl, now)
     dep_s, arr_s = _t(fl.get('scheduled_out')), _t(fl.get('scheduled_in'))
