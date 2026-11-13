@@ -31,7 +31,7 @@ ADSB = [('adsb.lol', 'https://api.adsb.lol/v2/callsign/{}', 'https://api.adsb.lo
         ('adsb.fi', 'https://opendata.adsb.fi/api/v2/callsign/{}', 'https://opendata.adsb.fi/api/v2/registration/{}')]
 HEADERS = {'User-Agent': 'frame-daily-plan (github.com/jakehitz-dotcom/frame-daily-plan)'}
 AIRPORTS = os.path.join(config.DATA, 'airports.json')
-DEFAULTS = {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20,
+DEFAULTS = {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20, 'inbound_minutes': 45,
             # Automatic look-ups only while one of these is home (nobody to see the TV otherwise)
             'presence': ['device_tracker.life360_jake_hitzeroth', 'device_tracker.life360_mike_schmer'],
             # Aircraft shown whenever they are in the air, ahead of calendar flights (free ADS-B only)
@@ -263,7 +263,33 @@ def local_span(fl, home_tz):
     return f"{d:%H:%M} ({d.tzname()}) – {a:%H:%M} ({a.tzname()})"
 
 
-def planner_line(fl, home_tz):
+def inbound(cfg, fl, now=None):
+    """The aircraft's previous flight, when it could hold this one up: {'ident', 'from', 'arrives' (its gate
+    arrival: actual, else FlightAware's estimate, else scheduled), 'gap' (minutes before this flight's
+    scheduled departure), 'late' (gap under inbound_minutes, default 45)}. None when there is nothing to
+    check: no inbound known, this flight already left or was cancelled, or departure is over 8 hours
+    away. One FlightAware call, every 10 minutes within 3 hours of departure, else every 30."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    dep = _t(fl.get('scheduled_out') or fl.get('scheduled_off'))
+    fid = fl.get('inbound_fa_flight_id')
+    if not fid or not dep or fl.get('actual_out') or fl.get('cancelled') or dep - now > datetime.timedelta(hours=8):
+        return None
+    data = _api(cfg, f'/flights/{fid}', fresh=600 if dep - now < datetime.timedelta(hours=3) else 1800)
+    prev = (data.get('flights') or [None])[0]
+    if not prev:
+        return None
+    arrives = _t(prev.get('actual_in') or prev.get('estimated_in') or prev.get('scheduled_in')
+                 or prev.get('actual_on') or prev.get('estimated_on'))
+    if not arrives:
+        return None
+    gap = round((dep - arrives).total_seconds() / 60)
+    return {'ident': pretty_ident(prev.get('ident_iata') or prev.get('ident') or ''),
+            'from': (prev.get('origin') or {}).get('code_iata') or '', 'arrives': arrives, 'gap': gap,
+            'landed': bool(prev.get('actual_in') or prev.get('actual_on')), 'cancelled': bool(prev.get('cancelled')),
+            'late': bool(prev.get('cancelled')) or gap < int(settings(cfg).get('inbound_minutes', 45))}
+
+
+def planner_line(fl, home_tz, inb=None):
     """One line for the plan: 'On time · departs 6:05 PM · gate 71A' (times at the departure airport),
     plus 'times': the flight's hours in each airport's zone when they differ from home."""
     word, colour = status(fl)
@@ -281,7 +307,21 @@ def planner_line(fl, home_tz):
         parts.append(fmt_time(_t(fl.get('actual_in') or fl.get('actual_on')), dst_tz, home_tz))
     if fl.get('gate_origin') and word in ('On time', 'Delayed'):
         parts.append(f"gate {fl['gate_origin']}")
-    return {'text': '  ·  '.join(p for p in parts if p), 'colour': colour, 'times': local_span(fl, home_tz)}
+    alert = None
+    if inb and inb['late'] and word in ('On time', 'Delayed'):
+        # The plane is not here yet: 'Inbound delayed · lands 5:42 PM, 23 min before departure'
+        org_tz = (fl.get('origin') or {}).get('timezone') or str(home_tz)
+        if inb['cancelled']:
+            alert = f"Inbound flight {inb['ident']} cancelled"
+        else:
+            when = fmt_time(inb['arrives'], org_tz, home_tz)
+            lead = (f"{inb['gap']} min before departure" if inb['gap'] >= 0 else
+                    f"{-inb['gap']} min after scheduled departure")
+            alert = f"Inbound {'arrived' if inb['landed'] else 'delayed · lands'} {when}, {lead}"
+        parts = [alert] + parts[:1]
+        colour = 'red' if inb['cancelled'] or inb['gap'] < 0 else 'amber'
+    return {'text': '  ·  '.join(p for p in parts if p), 'colour': colour, 'times': local_span(fl, home_tz),
+            'inbound_alert': alert}
 
 
 def in_air(cfg, fl, now, moving=False):

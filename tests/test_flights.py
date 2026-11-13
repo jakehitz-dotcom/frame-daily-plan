@@ -259,3 +259,22 @@ def test_flight_times_in_each_airports_zone():
     sfo = fl(destination={'code_iata': 'SFO', 'timezone': 'America/Los_Angeles'})
     assert flights.local_span(sfo, TZ) is None                     # all on Pacific time: the calendar's times stand
     assert flights.planner_line(den, TZ)['times'] == '14:29 (PST) – 17:56 (MST)'
+
+
+def test_inbound_flight_running_late_is_flagged(monkeypatch):
+    now = datetime.datetime(2026, 11, 8, 15, 0, tzinfo=TZ)
+    mine = fl(inbound_fa_flight_id='UAL812-1-0')                       # departs 18:05 PST (02:05Z)
+    prev = {'ident_iata': 'UA812', 'origin': {'code_iata': 'DEN'}, 'scheduled_in': '2026-11-09T01:00:00Z',
+            'estimated_in': '2026-11-09T01:42:00Z'}                    # lands 17:42: 23 min before departure
+    monkeypatch.setattr(flights, '_api', lambda cfg, path, params=None, fresh=0: {'flights': [prev]})
+    inb = flights.inbound(CFG, mine, now)
+    assert inb['gap'] == 23 and inb['late'] and inb['ident'] == 'UA 812'
+    line = flights.planner_line(mine, TZ, inb)
+    assert line['text'].startswith('Inbound delayed · lands 5:42 PM, 23 min before departure') and line['colour'] == 'amber'
+    prev['estimated_in'] = '2026-11-09T00:55:00Z'                        # 70 min: plenty
+    assert not flights.inbound(CFG, mine, now)['late']
+    assert flights.planner_line(mine, TZ, flights.inbound(CFG, mine, now))['text'].startswith('On time')
+    prev['estimated_in'] = '2026-11-09T02:20:00Z'                        # after our departure time
+    assert flights.planner_line(mine, TZ, flights.inbound(CFG, mine, now))['colour'] == 'red'
+    assert flights.inbound(CFG, dict(mine, actual_out='2026-11-09T02:10:00Z'), now) is None   # already left
+    assert flights.inbound(CFG, mine, now - datetime.timedelta(hours=10)) is None             # too early to tell

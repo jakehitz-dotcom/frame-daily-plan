@@ -54,7 +54,7 @@ DEFAULTS = {
     # a gust > gust_mph, or any NWS alert; wakes the TV once per episode outside quiet hours
     # Flights on the calendar ("Flight to Denver (UA 1234)"): status on the plan, live tracker in the air.
     # Needs a FlightAware AeroAPI key (Personal tier: no minimum, $5 free a month).
-    'flights': {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20,
+    'flights': {'enabled': True, 'aeroapi_key': '', 'wake': True, 'after_arrival_minutes': 20, 'inbound_minutes': 45,
                 'presence': ['device_tracker.life360_jake_hitzeroth', 'device_tracker.life360_mike_schmer'],
                 'watch_tails': [{'tail': 'N8333X', 'label': "Mark's Cessna 172"}]},
     'severe': {'enabled': True, 'precip_in': 0.3, 'gust_mph': 25, 'minutes': 30, 'wake': True,

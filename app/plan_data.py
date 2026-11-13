@@ -380,7 +380,12 @@ def build(cfg, now):
                     start = datetime.datetime.combine(day, datetime.time.fromisoformat(e['sort']), tz)
                     fl = flights.flight_for(cfg, ident, start, now)
                     if fl:
-                        e['flight'] = flights.planner_line(fl, tz)
+                        try:  # is the aircraft's previous flight running too late to turn around in time?
+                            inb = flights.inbound(cfg, fl, now)
+                        except Exception as ex:  # noqa: BLE001
+                            inb = None
+                            errors.append(f'Inbound for {ident}: {ex}')
+                        e['flight'] = flights.planner_line(fl, tz, inb)
                 except Exception as ex:  # noqa: BLE001
                     errors.append(f'Flight {ident}: {ex}')
     data = {'date': today.isoformat(), 'lang': cfg.get('plan_lang', 'en'), 'today': events,
