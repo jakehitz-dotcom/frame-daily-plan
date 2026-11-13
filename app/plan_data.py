@@ -349,6 +349,7 @@ def build(cfg, now):
         events, events_tomorrow = [], []
         errors.append(f'Holidays: {e}')
     todos = []
+    cals = []
     for c in cfg['calendars']:
         if not c.get('url'):
             continue
@@ -358,6 +359,8 @@ def build(cfg, now):
             errors.append(f"Calendar {c.get('name')}: {e}")
             continue
         is_todo = c.get('role') == 'todos'
+        if not is_todo:
+            cals.append(cal)
         e1, t1 = calendar_entries(cal, c.get('color', 'green'), today, tz, w, is_todo)
         e2, _ = calendar_entries(cal, c.get('color', 'green'), tomorrow, tz, w, is_todo)
         events += e1
@@ -400,7 +403,12 @@ def build(cfg, now):
     if clock.get('enabled', True):  # a few minutes ahead: the image is up to 5 minutes old when you see it
         data['clock'] = (now + datetime.timedelta(minutes=int(clock.get('ahead_minutes', 3)))).strftime('%H:%M')
         data['clock_style'], data['clock_opacity'] = clock.get('style', 'ring'), float(clock.get('opacity', 0.28))
-    data['banner'], data['countdown'] = banner.for_day(cfg, today)
+    try:  # a guest's first or last day ("Cheryl Visit" over several days): welcome / farewell on the banner
+        visit = banner.visit_line(*banner.visits(cals, today, tz))
+    except Exception as e:  # noqa: BLE001
+        visit = None
+        errors.append(f'Visits: {e}')
+    data['banner'], data['countdown'] = banner.for_day(cfg, today, visit)
     lists = (cfg.get('home_assistant') or {}).get('todo_lists') or []
     if lists and ha.configured(cfg):
         try:  # due today, overdue or undated; tasks dated later wait for their day
