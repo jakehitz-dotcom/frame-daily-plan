@@ -37,8 +37,9 @@ def test_flight_numbers_from_google_calendar_titles():
 def test_planner_lines():
     assert flights.planner_line(fl(), TZ)['text'] == 'On time  ·  departs 6:05 PM  ·  gate 71A'
     late = flights.planner_line(fl(departure_delay=3000, estimated_out='2026-11-09T02:55:00Z'), TZ)
-    assert late == {'text': 'Delayed to 6:55 PM  ·  gate 71A', 'colour': 'amber'}
-    assert flights.planner_line(fl(cancelled=True), TZ) == {'text': 'Cancelled', 'colour': 'red'}
+    assert (late['text'], late['colour']) == ('Delayed to 6:55 PM  ·  gate 71A', 'amber')
+    assert late['times'] == '18:05 (PST) – 21:30 (MST)'
+    assert flights.planner_line(fl(cancelled=True), TZ)['text'] == 'Cancelled'
     air = flights.planner_line(fl(actual_out='2026-11-09T02:10:00Z', actual_off='2026-11-09T02:25:00Z',
                                   estimated_on='2026-11-09T04:20:00Z'), TZ)
     assert air['text'] == 'On time · in flight  ·  lands 9:20 PM MST'
@@ -250,3 +251,11 @@ def test_a_flight_47_and_a_half_hours_away_is_still_in_the_window(monkeypatch):
     flights.flight_for(CFG, 'UA4705', dep, now)
     end = datetime.datetime.fromisoformat(asked[0]['end'].replace('Z', '+00:00'))
     assert dep < end <= now + datetime.timedelta(hours=48)
+
+
+def test_flight_times_in_each_airports_zone():
+    den = fl(scheduled_out='2026-11-13T22:29:00Z', scheduled_in='2026-11-14T00:56:00Z')
+    assert flights.local_span(den, TZ) == '14:29 (PST) – 17:56 (MST)'
+    sfo = fl(destination={'code_iata': 'SFO', 'timezone': 'America/Los_Angeles'})
+    assert flights.local_span(sfo, TZ) is None                     # all on Pacific time: the calendar's times stand
+    assert flights.planner_line(den, TZ)['times'] == '14:29 (PST) – 17:56 (MST)'

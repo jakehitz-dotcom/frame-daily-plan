@@ -249,8 +249,23 @@ def fmt_time(dt, tz_name, home_tz=None):
     return s
 
 
+def local_span(fl, home_tz):
+    """'14:29 (PST) – 17:56 (MST)': scheduled departure and arrival, each in its own airport's zone, when
+    either airport is not on home time; None when both are (the calendar's times are right then)."""
+    dep, arr = _t(fl.get('scheduled_out') or fl.get('scheduled_off')), _t(fl.get('scheduled_in') or fl.get('scheduled_on'))
+    org_tz = (fl.get('origin') or {}).get('timezone')
+    dst_tz = (fl.get('destination') or {}).get('timezone')
+    if not dep or not arr or not org_tz or not dst_tz:
+        return None
+    d, a = _local(dep, org_tz), _local(arr, dst_tz)
+    if d.utcoffset() == dep.astimezone(home_tz).utcoffset() and a.utcoffset() == arr.astimezone(home_tz).utcoffset():
+        return None
+    return f"{d:%H:%M} ({d.tzname()}) – {a:%H:%M} ({a.tzname()})"
+
+
 def planner_line(fl, home_tz):
-    """One line for the plan: 'On time · departs 6:05 PM · gate 71A' (times at the departure airport)."""
+    """One line for the plan: 'On time · departs 6:05 PM · gate 71A' (times at the departure airport),
+    plus 'times': the flight's hours in each airport's zone when they differ from home."""
     word, colour = status(fl)
     org_tz = (fl.get('origin') or {}).get('timezone') or str(home_tz)
     dst_tz = (fl.get('destination') or {}).get('timezone') or str(home_tz)
@@ -266,7 +281,7 @@ def planner_line(fl, home_tz):
         parts.append(fmt_time(_t(fl.get('actual_in') or fl.get('actual_on')), dst_tz, home_tz))
     if fl.get('gate_origin') and word in ('On time', 'Delayed'):
         parts.append(f"gate {fl['gate_origin']}")
-    return {'text': '  ·  '.join(p for p in parts if p), 'colour': colour}
+    return {'text': '  ·  '.join(p for p in parts if p), 'colour': colour, 'times': local_span(fl, home_tz)}
 
 
 def in_air(cfg, fl, now, moving=False):

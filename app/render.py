@@ -405,6 +405,8 @@ def events(d, items, x, y, w, bottom, scale=1.0):
         color = COLORS['grey'] if past else COLORS.get(ev.get('color', 'green'), COLORS['green'])
         d.rounded_rectangle([x, y + 8, x + 14, y + need - s(50)], radius=7, fill=color)
         times = ev.get('start', L['all_day']) + (f" – {ev['end']}" if ev.get('end') else '')
+        if (ev.get('flight') or {}).get('times'):  # a flight to or from another time zone: each airport's own clock
+            times = ev['flight']['times']
         d.text((x + 50, y), times + (f"  ·  {L['past']}" if past else ''), font=font(s(62), 'Medium'), fill=DIM if past else SOFT)
         for i, line in enumerate(lines):
             d.text((x + 50, y + s(80) + i * s(92)), line, font=tf, fill=DIM if past else CREAM)
