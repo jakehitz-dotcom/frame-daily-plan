@@ -168,7 +168,7 @@ def test_moving_on_adsb_starts_the_tracker_before_flightaware_catches_up():
 def test_a_phase_change_needs_two_looks_then_forces_a_refresh(monkeypatch):
     seen = iter(['parked', 'taxiing', 'taxiing'])
     w = {'flight': fl(), 'calendar': {'ident': 'UA1234'}}
-    monkeypatch.setattr(flights, 'watched', lambda cfg, now: w)
+    monkeypatch.setattr(flights, 'watched_all', lambda cfg, now: [w])
     monkeypatch.setattr(flights, 'phase', lambda cfg, f: next(seen))
     refreshed = []
     monkeypatch.setattr(flights, 'refresh_now', lambda f: refreshed.append(1))
@@ -177,9 +177,7 @@ def test_a_phase_change_needs_two_looks_then_forces_a_refresh(monkeypatch):
     for _ in range(3):
         memo['phase_at'] = 0
         jobs.watch_flight(CFG, memo, NOW)
-        assert not refreshed or memo.get('flight_force')
-    assert refreshed == [1] and memo['phase'] == 'taxiing'
-
+    assert refreshed == [1] and memo['phases']['UAL1234-1-0']['phase'] == 'taxiing' and memo['flight_force']
 
 def test_a_watched_aircraft_in_the_air_is_found_and_tracked(monkeypatch):
     flights._tails.clear()
@@ -218,3 +216,27 @@ def test_flightaware_is_asked_less_often_once_airborne(monkeypatch):
     flights.flight_for(CFG, 'UA1234', start, NOW)
     assert asked == [300, 1200]
     flights._cruising.discard('UA1234')
+
+
+
+def test_tomorrows_flight_window_stays_within_flightawares_limit(monkeypatch):
+    asked = []
+    monkeypatch.setattr(flights, '_api', lambda cfg, path, params=None, fresh=0: asked.append(params) or {'flights': []})
+    now = datetime.datetime(2026, 11, 13, 4, 0, tzinfo=TZ)
+    flights.flight_for(CFG, 'UA4705', datetime.datetime(2026, 11, 14, 19, 0, tzinfo=TZ), now)
+    end = datetime.datetime.fromisoformat(asked[0]['end'].replace('Z', '+00:00'))
+    assert end <= now + datetime.timedelta(hours=48) and asked[0]['start'] < asked[0]['end']
+
+
+def test_overlapping_flights_first_airborne_stays_until_it_lands(monkeypatch):
+    t = lambda h, m: datetime.datetime(2026, 11, 13, h, m, tzinfo=UTC)  # noqa: E731
+    a = fl(fa_flight_id='A', actual_out='2026-11-13T15:00:00Z', actual_off='2026-11-13T15:20:00Z')
+    b = fl(fa_flight_id='B', ident_iata='AS331', actual_out='2026-11-13T15:30:00Z', actual_off='2026-11-13T15:45:00Z')
+    pair = [({'ident': 'UA1234'}, a), ({'ident': 'AS331'}, b)]
+    monkeypatch.setattr(flights, 'someone_home', lambda cfg: True)
+    monkeypatch.setattr(flights, '_candidates', lambda cfg, now: pair)
+    assert flights.active(CFG, t(16, 0))['flight']['fa_flight_id'] == 'A'       # both up: the first one up
+    pair[0] = ({'ident': 'UA1234'}, dict(a, actual_on='2026-11-13T17:00:00Z'))
+    assert flights.active(CFG, t(17, 5))['flight']['fa_flight_id'] == 'B'       # A landed: switch to B
+    pair[1] = ({'ident': 'AS331'}, dict(b, actual_off=None))                     # B only taxiing, A just landed
+    assert flights.active(CFG, t(17, 5))['flight']['fa_flight_id'] == 'B'

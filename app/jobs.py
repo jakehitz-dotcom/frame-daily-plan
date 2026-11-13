@@ -409,7 +409,7 @@ def tick(cfg, now, memo):
             memo['flight_at'] = 0
         if time.time() - memo.get('flight_at', 0) >= 60:
             try:
-                moving = {memo.get('phase_flight')} if memo.get('phase') in ('taxiing', 'airborne') else set()
+                moving = {k for k, r in (memo.get('phases') or {}).items() if r['phase'] in ('taxiing', 'airborne')}
                 memo['flight'] = flights.active(cfg, now, moving)
             except Exception as e:  # noqa: BLE001
                 memo['flight'] = None
@@ -636,33 +636,47 @@ PHASE_EVERY = 30   # seconds between free ADS-B looks at a watched flight
 
 
 def watch_flight(cfg, memo, now):
-    """Every 30 s, ask free ADS-B what the watched aircraft is doing. When that changes (parked → taxiing
-    → airborne → taxiing → parked), seen twice in a row, refresh FlightAware and the screen at once:
-    a handful of half-cent calls per flight instead of waiting for the next scheduled look."""
+    """Every 30 s, ask free ADS-B what each watched aircraft is doing (every flight on the calendar from
+    an hour before departure). When one changes (parked → taxiing → airborne → taxiing → parked), seen
+    twice in a row, refresh FlightAware for that flight and the screen at once: a handful of half-cent
+    calls per flight instead of waiting for the next scheduled look."""
     if time.time() - memo.get('phase_at', 0) < PHASE_EVERY:
         return
     memo['phase_at'] = time.time()
     try:
-        w = flights.watched(cfg, now)
-        p = flights.phase(cfg, w['flight']) if w else None
+        watching = flights.watched_all(cfg, now)
     except Exception as e:  # noqa: BLE001
         print('flight watch:', e, file=sys.stderr)
         return
-    if not w or p is None:
-        return
-    key = w['flight'].get('fa_flight_id')
-    if memo.get('phase_flight') != key:
-        memo.update(phase_flight=key, phase=p, phase_seen=None)
-        return
-    if p == memo.get('phase'):
-        memo['phase_seen'] = None
-        return
-    if memo.get('phase_seen') != p:  # once could be a glitch: wait for a second look
-        memo['phase_seen'] = p
-        return
-    log(f"Flight {w['calendar']['ident']}: {memo.get('phase')} → {p}; checking FlightAware now")
-    memo.update(phase=p, phase_seen=None, flight_force=True)
-    flights.refresh_now(w['flight'])
+    phases = memo.setdefault('phases', {})
+    keys = set()
+    for w in watching:
+        key = w['flight'].get('fa_flight_id')
+        keys.add(key)
+        try:
+            p = flights.phase(cfg, w['flight'])
+        except Exception as e:  # noqa: BLE001
+            print('flight watch:', e, file=sys.stderr)
+            continue
+        if p is None:
+            continue
+        rec = phases.get(key)
+        if rec is None:
+            phases[key] = {'phase': p, 'seen': None}
+            continue
+        if p == rec['phase']:
+            rec['seen'] = None
+            continue
+        if rec['seen'] != p:  # once could be a glitch: wait for a second look
+            rec['seen'] = p
+            continue
+        log(f"Flight {w['calendar']['ident']}: {rec['phase']} → {p}; checking FlightAware now")
+        rec.update(phase=p, seen=None)
+        memo['flight_force'] = True
+        flights.refresh_now(w['flight'])
+    for key in list(phases):
+        if key not in keys:
+            phases.pop(key)
 
 
 def show_flight(cfg, found, refresh=False, woke=False, until=None):

@@ -110,7 +110,12 @@ def _api(cfg, path, params=None, fresh=300):
                          headers=dict(HEADERS, **{'x-apikey': settings(cfg)['aeroapi_key']}))
         if r.status_code == 401:
             raise RuntimeError('FlightAware refused the API key')
-        r.raise_for_status()
+        if r.status_code >= 400:  # say why (FlightAware explains in the body)
+            try:
+                why = r.json().get('detail') or r.json().get('reason') or r.text[:160]
+            except ValueError:
+                why = r.text[:160]
+            raise RuntimeError(f'FlightAware {r.status_code}: {why}')
         return r.json()
     return _cached(('api', path, tuple(sorted((params or {}).items()))), fresh, get)
 
@@ -156,9 +161,14 @@ def flight_for(cfg, ident, start, now=None):
     Checked every 30 minutes until 3 hours before departure, then every 5 minutes."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     soon = abs((start - now).total_seconds()) < 3 * 3600 or start < now
-    day = start.astimezone(datetime.timezone.utc).date()
-    params = {'start': (day - datetime.timedelta(days=1)).isoformat(),
-              'end': (day + datetime.timedelta(days=2)).isoformat()}
+    # FlightAware only accepts a window from 10 days ago to 2 days ahead of *now* (a later end is a 400 Bad
+    # Request, which hid tomorrow's flights): 12 hours either side of the flight, clamped to that range.
+    lo = max(start - datetime.timedelta(hours=12), now - datetime.timedelta(days=9))
+    hi = min(start + datetime.timedelta(hours=12), now + datetime.timedelta(hours=47))
+    if hi <= lo:
+        return None
+    iso = lambda t: t.astimezone(datetime.timezone.utc).replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')  # noqa: E731
+    params = {'start': iso(lo), 'end': iso(hi)}
     # Airborne, the status hardly changes: every 20 minutes (takeoff, landing and arrival are caught at once by
     # the free ADS-B watch, which forces a fresh look). Near departure every 5, otherwise every 30 minutes.
     fresh = 1200 if ident in _cruising else 300 if soon else 1800
@@ -269,12 +279,10 @@ def in_air(cfg, fl, now, moving=False):
     return bool(moving) or bool(started and started <= now)
 
 
-def active(cfg, now=None, moving=()):
-    """The calendar flight being flown right now (its AeroAPI flight plus the calendar entry), or None.
-    moving: FlightAware ids that free ADS-B already sees on the move."""
-    if not configured(cfg) or not someone_home(cfg):
-        return None
-    now = now or datetime.datetime.now(datetime.timezone.utc)
+def _candidates(cfg, now):
+    """(calendar entry, FlightAware flight) for calendar flights from an hour before departure until
+    20 hours after (cached look-ups)."""
+    out = []
     for cf in calendar_flights(cfg, now):
         if not (cf['start'] - datetime.timedelta(hours=1) <= now <= cf['start'] + datetime.timedelta(hours=20)):
             continue
@@ -283,31 +291,57 @@ def active(cfg, now=None, moving=()):
         except Exception as e:  # noqa: BLE001
             print('flights:', cf['ident'], e, file=sys.stderr)
             continue
-        if in_air(cfg, fl, now, fl.get('fa_flight_id') in moving if fl else False):
-            return {'calendar': cf, 'flight': fl}
-    return None
+        if fl:
+            out.append((cf, fl))
+    return out
 
 
-def watched(cfg, now=None):
-    """The calendar flight worth watching for a change: from an hour before departure until shortly
-    after it reaches the gate (cached FlightAware data only: no extra cost)."""
+def active(cfg, now=None, moving=()):
+    """The calendar flight the tracker shows right now (its AeroAPI flight plus the calendar entry), or None.
+    moving: FlightAware ids that free ADS-B already sees on the move.
+
+    With two flights at once: the one that took off first stays on screen until it lands, then the
+    other. Order: airborne (earliest takeoff) > taxiing out (earliest pushback) > just arrived."""
     if not configured(cfg) or not someone_home(cfg):
         return None
     now = now or datetime.datetime.now(datetime.timezone.utc)
-    for cf in calendar_flights(cfg, now):
-        if not (cf['start'] - datetime.timedelta(hours=1) <= now <= cf['start'] + datetime.timedelta(hours=20)):
+    far = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
+    ranked = []
+    for cf, fl in _candidates(cfg, now):
+        is_moving = fl.get('fa_flight_id') in moving
+        if not in_air(cfg, fl, now, is_moving):
             continue
-        try:
-            fl = flight_for(cfg, cf['ident'], cf['start'], now)
-        except Exception:  # noqa: BLE001
-            continue
-        if not fl or fl.get('cancelled'):
-            continue
+        off, landed = _t(fl.get('actual_off')), fl.get('actual_on') or fl.get('actual_in')
+        if off and not landed:
+            ranked.append(((0, off), cf, fl))                                   # flying: earliest takeoff first
+        elif not landed:
+            ranked.append(((1, _t(fl.get('actual_out')) or now), cf, fl))      # taxiing out
+        else:
+            ranked.append(((2, far - _t(landed)), cf, fl))                     # just arrived: latest first
+    if not ranked:
+        return None
+    _, cf, fl = min(ranked, key=lambda r: r[0])
+    return {'calendar': cf, 'flight': fl}
+
+
+def watched_all(cfg, now=None):
+    """Every calendar flight worth watching on free ADS-B (cached FlightAware data only: no extra cost)."""
+    if not configured(cfg) or not someone_home(cfg):
+        return []
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    out = []
+    for cf, fl in _candidates(cfg, now):
         done = _t(fl.get('actual_in'))
-        if done and now > done + datetime.timedelta(minutes=settings(cfg)['after_arrival_minutes']):
+        if fl.get('cancelled') or (done and now > done + datetime.timedelta(minutes=settings(cfg)['after_arrival_minutes'])):
             continue
-        return {'calendar': cf, 'flight': fl}
-    return None
+        out.append({'calendar': cf, 'flight': fl})
+    return out
+
+
+def watched(cfg, now=None):
+    """The first calendar flight worth watching (see watched_all)."""
+    w = watched_all(cfg, now)
+    return w[0] if w else None
 
 
 def phase(cfg, fl):
