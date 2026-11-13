@@ -240,3 +240,13 @@ def test_overlapping_flights_first_airborne_stays_until_it_lands(monkeypatch):
     assert flights.active(CFG, t(17, 5))['flight']['fa_flight_id'] == 'B'       # A landed: switch to B
     pair[1] = ({'ident': 'AS331'}, dict(b, actual_off=None))                     # B only taxiing, A just landed
     assert flights.active(CFG, t(17, 5))['flight']['fa_flight_id'] == 'B'
+
+
+def test_a_flight_47_and_a_half_hours_away_is_still_in_the_window(monkeypatch):
+    asked = []
+    monkeypatch.setattr(flights, '_api', lambda cfg, path, params=None, fresh=0: asked.append(params) or {'flights': []})
+    now = datetime.datetime(2026, 11, 13, 0, 15, tzinfo=TZ)
+    dep = datetime.datetime(2026, 11, 14, 23, 45, tzinfo=TZ)                  # 47.5 h ahead
+    flights.flight_for(CFG, 'UA4705', dep, now)
+    end = datetime.datetime.fromisoformat(asked[0]['end'].replace('Z', '+00:00'))
+    assert dep < end <= now + datetime.timedelta(hours=48)

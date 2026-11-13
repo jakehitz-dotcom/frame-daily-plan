@@ -161,10 +161,12 @@ def flight_for(cfg, ident, start, now=None):
     Checked every 30 minutes until 3 hours before departure, then every 5 minutes."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     soon = abs((start - now).total_seconds()) < 3 * 3600 or start < now
+    # Flight numbers repeat daily, so look 12 hours either side of the calendar time and take the closest.
     # FlightAware only accepts a window from 10 days ago to 2 days ahead of *now* (a later end is a 400 Bad
-    # Request, which hid tomorrow's flights): 12 hours either side of the flight, clamped to that range.
+    # Request, which hid tomorrow's flights), so the window is clamped to that: any flight up to 48 hours
+    # away is still found.
     lo = max(start - datetime.timedelta(hours=12), now - datetime.timedelta(days=9))
-    hi = min(start + datetime.timedelta(hours=12), now + datetime.timedelta(hours=47))
+    hi = min(start + datetime.timedelta(hours=12), now + datetime.timedelta(hours=48, minutes=-1))
     if hi <= lo:
         return None
     iso = lambda t: t.astimezone(datetime.timezone.utc).replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')  # noqa: E731
